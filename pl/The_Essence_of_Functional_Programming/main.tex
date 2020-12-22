@@ -1,0 +1,1098 @@
+\documentclass[12pt]{article}
+\input{setting.tex}
+\renewcommand{\thesection}{\Roman{section}}
+\renewcommand{\thesubsection}{\thesection-\arabic{subsection}}
+
+\title{The Essence of Functional Programming}
+\author{Yiteng Zhang}
+
+\begin{document}
+\maketitle
+
+\noindent{}\textbf{注：}本文是对Philip Wadler的经典文章\textit{The Essence of Functional Programming}（函数
+式编程的本质）的简译和总结，包含其文章主要的内容，并略去了一部分相关讨论。具体的讨论细节可以结合近年来
+相关主题的发展（包括Philip Wadler文集）进一步了解。
+~\\
+
+\noindent{}\textbf{摘要：}这篇文章探索了利用monads（单子）来构建函数式程序，而不涉及有关monads和范畴论
+的预备知识。Monads 增强了程序修改的 便利性，它们可以模拟不纯（impure）特性的效用，比如
+exception（异常），state（状态）与continuation（延续），并可提
+供这些特性难以轻易达成的效用。一个程序的类型（types）反映了具体发生了什么效用。
+文章的第一部分是一个有关使用monads的扩展
+例子，一个简单的解释器被修改，以支持各种额外的特性：错误信息、状态、输出与
+非确定性选择（non-deterministic choice）。第二部分描述了
+monads与延续传递风格（continuation-passing style）之间的关系。第三部分勾勒了monads是如何被用于一个由Haskell
+写成的Haskell编译器中的。
+
+\section{Introduction}
+\noindent{}\textbf{纯（pure）还是不纯（impure），如何选择？}
+
+\indent{}纯函数式语言，比如Haskell，提供了惰性求值（lazy evaluation）的能力与等式推理（equational resoning）的
+简单性。不纯的函数式语言，比如Standard ML或Scheme，提供了一些诱人的特性，比如状态，异常处理和延续。一个影响
+选择的因素是对应的程序能够被修改的简易性。纯函数式语言通过使每个操作所依赖的数据显性化来简化更改。但有时，一
+个看似很小的变更就需要对纯函数式程序进行大规模重构，而明智地使用不纯特性时，只需修改少数几行即可。
+
+\indent{}假设我们用纯函数式语言写了一个解释器。为了给它加上异常处理，我们需要修改结果类型以包含错误值，并在
+每个递归调用中检查和正确处理错误。当使用不纯语言的异常处理时，就不需要这种重构。为了给它加上调用计数，我们
+需要修改结果类型以包含计数值，并修改每次的递归调用来正确地传递这个计数。若使用不纯语言，就可以直接用一个全局变量
+作计数用。为了给它加上输出指令，我们需要修改结果类型以包含输出列表，并对每次递归调用进行修改来正确地传递这个列表。
+如果使用不纯的语言，输出即为一种副作用，就不需要做那种重构。
+这些例子更加凸显了monad的作用。这篇文章展示了如何使用monads来构建解释器，从而使得上面提到
+的那些改变都易于进行。在每种情形下，所有需要做的事只是重新定义monad并在局部处做寥寥修改。这种编程风格
+可以让我们在不使用相应的不纯特性时，重获不纯语言的各种特性所能提供的灵活性。
+这种技术不仅仅可以应用在解释器上，其实它可以在函数式程序中有很广泛的应用。位于Glasgow的GRASP
+团队为名为Haskell的函数式语言构建了一个编译器，这个编译器本身也是用Haskell写成的，并使用了monads。
+
+\indent{}使用monads进行编程很难不让人联想到延续传递风格（continuation-passing style，CPS），这篇文章也探讨了它们二者
+之间的关系。某种情形下它们是等价的：CPS作为monad的一种特例出现，而任何monad也可能通过改变应答类型（answer type）被
+嵌入CPS中。但是，monadic的方法提供了额外的insight，并能够提供更精细程度上的控制。
+
+\indent{}关于标题，需要注意的是，使用“essence”一词的目的是在技术层面上强调这篇文章中描述的技术是很有用的，但并不是
+说他们是必不可少的。
+%余下章节是这样组织的：第二章通过考虑一个解释器的不同变体来描述monads在构建程序时的使用；
+%第三章探索了monads和CPS之间的关系；第四章勾勒了这种思想是如何被用于Haskell编译器中的。
+\vspace{-0.6em}
+\section{解释Monads}\label{sec:interp_monad}
+这一章通过展示一个用作lambda演算的解释器的几个变体来佐证monads增强了模块化这一论点。
+该解释器如下所示，这里采用了Haskell进行描述。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\scriptsize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+type  Name             =  String
+
+data  Term             =  Var Name
+                       |  Con Int
+                       |  Add Term Term
+                       |  Lam Name Term
+                       |  App Term Term
+
+data  Value            =  Wrong
+                       |  Num Int
+                       |  Fun (Value -> M Value)
+
+type  Environment      =  [(Name, Value)]
+
+showval                :: Value -> String
+showval Wrong          =  "<wrong>"
+showval (Num i)        =  showint i
+showval (Fun f)        =  "<function>"
+
+interp                 :: Term -> Environment -> M Value
+interp (Var x) e       =  lookup x e
+interp (Con i) e       =  unitM (Num i)
+interp (Add u v) e     =  interp u e `bindM` (\a ->
+                          interp v e `bindM` (\b ->
+                          add a b))
+interp (Lam x v) e     =  unitM (Fun (\a -> interp v ((x,a):e)))
+interp (App t u) e     =  interp t e `bindM` (\f ->
+                          interp u e `bindM` (\a ->
+                          apply f a))
+
+lookup                 :: Name -> Environment -> M Value
+lookup x []            =  unitM Wrong
+lookup x ((y,b):e)     =  if x==y then unitM b else lookup x e
+
+add                    :: Value -> Value -> M Value
+add (Num i) (Num j)    =  unitM (Num (i+j))
+add a b                =  unitM Wrong
+
+apply                  :: Value -> Value -> M Value
+apply (Fun k) a        =  k a
+apply f a              =  unitM Wrong
+
+test                   :: Term -> String
+test t                 =  showM (interp t [])
+\end{minted}
+\noindent{}其中，类型构造器（type constructor）\texttt{M}和函数\texttt{unitM}，\texttt{bindM}与\texttt{showM}都
+与monads有关，后面会有相应的解释。解释器处理值（values）和terms。一个值要么是\texttt{Wrong}，要么是一个数字，或
+是一个函数。\texttt{Wrong}值代表一个错误，比如未绑定的变量，一次非数字的相加，或者一次非函数的应用。一个
+term可以是一个变量，或一个常量，或一个和，或一个lambda表达式，或是一次应用。
+
+\indent{}比如我们有一个term $((\lambda x.\,x + x) (10 + 11))$，记为\texttt{term0}，用我们的解释器来描述即为：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+term0  =  (App (Lam "x" (Add (Var "x") (Var "x")))
+               (Add (Con 10) (Con 11)))
+\end{minted}
+\noindent{}对于标准的解释器，对\texttt{test term0}进行求值会得到字符串\texttt{"42"}。
+
+\indent{}为方便说明起见，这个解释器比较小。它可以很容易被扩充以应对额外的值，比如布尔值，pairs和lists；还有
+额外的term形式，比如说条件（conditional）与不动点（fixpoint）。
+
+\subsection{什么是monad？}\label{sec:what_is_monad}
+\indent{}就我们的目的而言，一个monad是一个三元组（triple）：\texttt{(M, unitM, bindM)}，其包含
+一个类型构造器（type constructor）\texttt{M}，和一对儿多态（polymorphic）函数。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+unitM  ::  a -> M a
+bindM  ::  M a -> (a -> M b) -> M b
+\end{minted}
+\noindent{}这些函数必须满足三条定律，见 \ref{sec:monad_law} 小节。
+
+\indent{}将一个程序转换为monadic形式的基本思路是：一个类型为\texttt{a -> b}的函数被转到类型为\texttt{a -> M b}的
+函数。因而，在\texttt{Value}的定义中，函数的类型是\texttt{Value -> M Value} 而非\texttt{Value -> Value}，并且
+\texttt{interp}的类型为\texttt{Term -> Environment -> M Value} 而非\texttt{Term -> Environment -> Value}。
+与其相似的，在辅助函数\texttt{lookup}，\texttt{add}和\texttt{apply}中也都是如此。
+
+\indent{}恒等函数的类型是\texttt{a -> a}，对应的monadic的函数是\texttt{unitM :: a -> M a}。它取一个值，将其
+变成相应的monad形式的值。当我们考虑常数的情况时：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+interp (Con i) e  =  unitM (Num i)
+\end{minted}
+\noindent{}表达式\texttt{(Num i)}的类型是\texttt{Value}，因而将\texttt{unitM}作用于其上，
+会得到相应的\texttt{M Value}。
+
+\indent{}两个函数\texttt{k :: a -> b}和\texttt{h :: b -> c}通过写成如下形式被组合（composed）起来：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+\a -> let b = k a in h b
+\end{minted}
+\noindent{}这个函数的类型是\texttt{a -> c}。（这里 \texttt{\textbackslash{}name -> expr}是lambda表达式）
+与此相似的，两个在monadic形式下的函数\texttt{k :: a -> M b}和 \texttt{h :: b -> M c}的组合可以写成：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+(\a -> k a `bindM` (\b -> h b))
+\end{minted}
+\noindent{}其具有类型\texttt{a -> M c}。因而，\texttt{bindM}在这里的角色和\texttt{let}表达式有些像。
+上面提到的三条monad定律只是保证这个组合形式是可结合的，并以\texttt{unitM}为左单位元与右单位元（identity）。
+
+\indent{}考虑如下的求和情形：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+interp (Add u v) e  =  interp u e `bindM` (\a ->
+                       interp v e `bindM` (\b ->
+                       add a b))
+\end{minted}
+\indent{}上面的片段可以这样读：对\texttt{u}求值；将\texttt{a}绑定到其结果上；对\texttt{v}求值，将\texttt{b}绑定
+到其结果上；将\texttt{a}加到\texttt{b}上。这样类型也就出来了：对\texttt{interp}与\texttt{add}的调用给出的结果
+具有类型\texttt{M Value}，变量\texttt{a}和\texttt{b}具有类型\texttt{Value}。
+
+\indent{}对函数应用的处理是类似的。特别是，函数和它的参数会被求值，所以这个解释器使用的是call-by-value策略。一个
+使用call-by-name策略的解释器会在第二章被讨论到。
+
+\indent{}就像类型\texttt{Value}表示一个值那样，类型\texttt{M Value}可以被看作是表示一个计算。\texttt{unitM}的
+目的是将一个值压到一个计算里。\texttt{bindM}的目的是对一个计算求值，并给出一个值。
+
+\indent{}不严格地来讲，\texttt{unitM}将我们带入monad，\texttt{bindM}让我们绕着monad。那我们怎么从monad里出来呢？
+通常来说，这样的操作需要一个更为特别的设计。就我们的目的而言，要提供下面这个：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+showM :: M Value -> String
+\end{minted}
+\noindent{}它在\texttt{test}中被使用。
+
+\indent{}通过改变\texttt{M}、\texttt{unitM}、\texttt{bindM}与\texttt{showM}的定义，并做一些其它的小修小改，
+这个解释器就可以表现出各种各样的行为，这一点正是下面的各种变体将要展示的。
+
+\vspace{-0.3em}
+\subsection{变体零：标准的解释器}
+\noindent{}作为起始，先来定义一个平凡的monad。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+type  I a      =  a
+
+unitI a        =  a
+a `bindI` k    =  k a
+showI a        =  showval a
+\end{minted}
+\noindent{}这被称之为\textsl{identity} monad：\texttt{I}是类型上的恒等函数（identity function），\texttt{unitI}是
+恒等函数，\texttt{bindI}是后缀（函数）应用，\texttt{showI}与\texttt{showval}等同。
+
+\indent{}将解释器中的monad \texttt{M}用monad \texttt{I}代换
+掉（也就是说，用\texttt{I}，\texttt{unitI}，\texttt{bindI}，\texttt{showI}将
+\texttt{M}，\texttt{unitM}，\texttt{bindM}，\texttt{showM}分别代换掉），这给出了用于lambda演算的标准
+元循环（meta-circular）解释器：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+interp                :: Term -> Environment -> Value
+interp (Var x) e      =  lookup x e
+interp (Con i) e      =  Num i
+interp (Add u v) e    =  add (interp u e) (interp v e)
+interp (Lam x v) e    =  Fun (\a -> interp v ((x,a):e))
+interp (App t u) e    =  apply (interp t e) (interp u e)
+\end{minted}
+\noindent{}解释器中的其它函数也以相似的方式进行简化。
+
+\subsection{变体一：错误消息}\label{sec:err_msg}
+\noindent{}为了给解释器加上错误消息，定义下述monad。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+data  E a                =  Success a | Error String
+
+unitE a                  =  Success a
+errorE s                 =  Error s
+
+(Success a) `bindE` k    =  k a
+(Error s)   `bindE` k    =  Error s
+
+showE (Success a)        =  "Success: " ++ showval a
+showE (Error s)          =  "Error: " ++ s
+\end{minted}
+\noindent{}解释器中的每个函数要么通过给出一个形式为\texttt{Success a}的值正常返回，要么通过给出形式
+为\texttt{Error s}的值来指示一个错误，其中\texttt{s}是一条错误信息字符串。如果有\texttt{m :: E a}和
+\texttt{k :: a -> E b}，那么\texttt{m `bindE` k}的行为是严格的后缀应用：如果\texttt{m}成功，那么
+\texttt{k}会被应用在成功的结果上；如果\texttt{m}失败了，那么应用也会失败。show函数会打印
+结果（当成功时），或者是错误信息。
+
+\indent{}在解释器中，将monad \texttt{M}用monad \texttt{E}代换掉，然后把每个出现的\texttt{unitE Wrong}
+替换为\texttt{errorE}的合适调用。这些修改发生在\texttt{lookup}，\texttt{add}和\texttt{apply}中，其它
+地方不用动。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+lookup x []    = errorE ("unbound variable: "   ++ x)
+add a b        = errorE ("should be numbers: "  ++ showval a
+                                         ++ "," ++ showval b)
+apply f a      = errorE ("should be function: " ++ showval f)
+\end{minted}
+\noindent{}现在，对\texttt{test term0}求值会返回\texttt{"Success: 42"}。
+
+\indent{}在不纯的语言中，这种修改可以通过使用一些特性，比如异常或者延续来达到指示错误的效用。而在
+这里，我们的 monad \texttt{E}能够很好地对错误进行响应，例如对\texttt{test (App (Con 1) (Con 2))}求值的话，会
+得到一条消息\texttt{"Error: should be function: 1"}。
+
+\subsection{变体二：带有位置的错误消息}\label{sec:err_msg_pos}
+\indent{}令\texttt{Position}为用来指示源代码位置（即行号）的一个类型。我们用一个指示位置的构造器（constructor）
+来扩充\texttt{Term}数据类型（datatype）。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+data  Term  =  ... | At Position Term
+\end{minted}
+\noindent{}解析器（parser）会产生合适的term。比如说，\texttt{(At p (App t (At q u)))}表示\texttt{p}是
+term \texttt{(App t u)}的位置，且\texttt{q}是sub-term \texttt{u}的位置。
+
+\indent{}基于monad \texttt{E}，我们定义一个新的monad \texttt{P}，它接受一个位置，并将其用于错误报告消息中。
+这种带有位置信息的错误消息可以被看成是加强版的monad \texttt{E}，定义如下：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+type  P a      =  Position -> E a
+
+unitP a        =  \p -> unitE a
+errorP s       =  \p -> errorE (showpos p ++ ": " ++ s)
+
+m `bindP` k    =  \p -> m p `bindE` (\x -> k x p)
+
+showP m        =  showE (m pos0)
+\end{minted}
+\noindent{}其中，\texttt{unitP}会丢掉当前位置，而\texttt{errorP}会将当前位置加在错误消息上，\texttt{bindP}将
+位置传给参数和函数，\texttt{showP}会传入一个初始位置\texttt{pos0}。除此之外，还有一个用于改变位置的函数：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+resetP        ::  Position -> P x -> P x
+resetP q m    =  \p -> m q
+\end{minted}
+\noindent{}它会丢掉传入的位置\texttt{p}，并用给定的位置\texttt{q}替代它。
+
+\indent{}要修改之前版本解释器，我们将解释器中的每处monad \texttt{E} 替换为monad \texttt{P}，并增加一
+种对\texttt{At} term进行处理的case：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+interp (At p t) e  =  resetP p (interp t e)
+\end{minted}
+\noindent{}这会将位置重置。其它的地方无需改动。
+
+\indent{}如果没有monad或其他类似的技术，针对这种效用的修改将会是非常枯燥而乏味的。在那种情形下，
+解释器中每一块相关的地方都要被重写，以将当前位置作为额外的参数接受，并将其在每个递归调用时传递。
+在不纯的语言中，想要达到类似效用所需的修改也不是那么简单的。一个方法是使用一个用于保存位置
+的（栈结构的）状态变量。必须要小心而正确地维护状态：在进入\texttt{At}结构时将位置推入栈中，在
+离开时将位置从栈中弹出。
+
+\subsection{变体三：状态}\label{sec:variation_state}
+\indent{}为了描绘对状态的操纵，解释器会被修改以记录在计算过程中发生归约（reduction）的次数。
+相同的技术可以用于处理其他状态依赖（state-dependent）的构造，比如用引用值（reference values）和对堆
+有副作用的操作来扩展解释型语言（interpreted language）。
+
+\indent{}状态变换器的monad定义如下：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+type  S a      =  State -> (a, State)
+
+unitS a        =  \s0 -> (a, s0)
+m `bindS` k    =  \s0 -> let (a, s1) = m s0
+                             (b, s2) = k a s1
+                         in  (b, s2)
+\end{minted}
+
+\indent{}状态转换器取一个初始状态并返回一个值，该值与新的状态一起组对。函数unit返回给定值，并将状态
+不加改变地进行传播。函数bind取一个状态转换器\texttt{m :: S a}和一个函数\texttt{k :: a -> S b}，它将初始状态传给
+\texttt{m}，这给出了一个与中间状态成组（paired）的值。函数\texttt{k}被应用到这个值上，产生一个状态转换器
+\texttt{(k a :: S b)}，它将中间状态进行处理并给出与最终状态成组的结果。
+
+\indent{}为了对执行计数（execution counts）进行建模，我们取状态为整数（integer）。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+type  State  =  Int
+\end{minted}
+
+\indent{}show函数接受初始状态（计数值为零），并打印最终状态（如上所述，在这里是计数值）。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+showS m      =  let (a, s1) = m 0
+                in  "Value: " ++ showval a ++ "; " ++
+                    "Count: " ++ showval s1
+\end{minted}
+
+\indent{}当前计数值会以下述方式进行递增：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+tickS        :: S ()
+tickS        =  \s -> ((), s+1)
+\end{minted}
+\noindent{}其返回的值是空的元组（tuple），和值一样，其类型亦被写作\texttt{()}。\texttt{tickS}的类型说明我们并不关心
+具体返回了什么值，这类似于在不纯的语言中使用一个结果类型（result type）为\texttt{()}的函数。这表明了该函数的
+目的在于副作用。
+
+\indent{}我们通过将解释器中的monad \texttt{M} 替换为monad \texttt{S}对其进行修改。具体来说，我们需要修改函数
+\texttt{apply}和\texttt{add}的第一行。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+apply (Fun k) a        =  tickS `bindS` (\() -> k a)
+add (Num i) (Num j)    =  tickS `bindS` (\() -> unitS (Num (i + j)))
+\end{minted}
+\noindent{}对于每个应用与相加操作，都会计数一次。比如，如果我们对\texttt{test term0}求值，会得到
+\texttt{"Value: 42; Count: 3"}。没有其它的地方需要被修改了。
+
+\indent{}一个进一步的修改会将语言扩展，以允许对当前的执行计数进行访问。首先，我们给monad增加一个新的操作来
+支持这一扩展：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+fetchS    ::  S State
+fetchS    =   \s -> (s, s)
+\end{minted}
+\noindent{}这会返回当前的计数。之后，我们扩充term数据类型：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+data  Term        =  ... | Count
+
+interp Count e    =  fetchS `bindS` (\i -> unitS (Num i))
+\end{minted}
+\noindent{}对\texttt{Count}求值会获取到至此为止的所有执行次数，并将其作为term的值返回。举个例子，如果
+我们将\texttt{test}应用到\texttt{(Add (Add (Con 1) (Con 2)) Count)}上，会返回\texttt{"Value: 4; Count: 2"}，
+因为在\texttt{Count}被求值之前有一次相加操作。
+
+\subsection{变体四：输出}\label{sec:output}
+下面我们修改解释器以进行输出操作。虽然state monad看起来是一个自然的选择，但它对此有一点不足：将输出累积到
+最终的状态意味着在计算结束之前不会有任何输出被打印，这不是我们想要的。下面的设计会在输出动作发生时就进行打印，
+它依赖于惰性求值（lazy evaluation）。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+type  O a       =  (String, a)
+
+unitO a         =  ("", a)
+m `bindO` k     =  let (r, a) = m
+                       (s, b) = k a
+                   in  (r ++ s, b)
+showO (s, a)    =  "Output: " ++ s ++ " Value: " ++ showval a
+\end{minted}
+\noindent{}每个值都与计算其值时产生的输出成组。函数\texttt{unitO}返回给定的值而不产生任何输出。函数\texttt{bindO}执行
+一个应用，并将其参数产生的输出与对应的应用产生的输出连接起来。函数\texttt{showO}用于打印输出和值。上述的这些函数都传播
+了输出，但是并没有生成输出，生成输出的工作是下面的函数要做的事情：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+outO      :: Value -> O ()
+outO a    =  (showval a ++ "; ", ())
+\end{minted}
+
+\indent{}如此一来，语言又可以被扩展以支持输出操作。具体来说，将monad \texttt{M}用monad \texttt{O}替换，并
+增加一个新的term和相应的clause：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+data  Term          =  ... | Out Term
+
+interp (Out u) e    =  interp u e `bindO` (\a  ->
+                       outO a     `bindO` (\() ->
+                       unitO a))
+\end{minted}
+\noindent{}对\texttt{(Out u)}求值会将\texttt{u}的值送往输出，并将其作为term的值返回。举个例子，如果
+我们将\texttt{test}应用到\texttt{(Add (Out (con 41)) (Out (Con 1)))}上，会返回\texttt{"Output: 41; Value: 42"}。
+
+\vspace{-0.2em}
+\subsection{变体五：非确定性选择（Non-deterministic choice）}
+\noindent{}现在修改解释器以应对非确定性语言会返回一列可能的结果的情形。所谓的 list monad 定义如下：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+type  L a      =  [a]
+
+unitL a        =  [a]
+m `bindL` k    =  [b | a <- m, b <- k a]
+
+zeroL          =  []
+l `plusL` m    =  l ++ m
+
+showL m        =  showlist [showval a | a <- m]
+\end{minted}
+\noindent{}上述片段使用了列表推导式（list comprehension）的记法进行描述。函数\texttt{showlist}取一个字符串列表，
+并利用合适的符号从其产生一个字符串。
+
+\indent{}我们的解释型语言又可以被扩充了，这次增加了两个新的结构。我们同样做代换，将monad \texttt{M} 替换为monad \texttt{L}，
+并增加了两个新的term和相应的clause。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+data  Term            =  ... | Fail | Amb Term Term
+
+interp Fail e         =  zeroL
+interp (Amb u v) e    =  interp u e `plusL` interp v e
+\end{minted}
+\noindent{}对\texttt{Fail}求值不会返回值，对\texttt{(Amb u v)}求值会返回所有\texttt{u}和\texttt{v}返回的值。
+
+\indent{}举个例子,如果我们将 \texttt{test} 应用到
+\begin{displaymath}
+\texttt{(App (Lam "x" (Add (Var "x") (Var "x"))) (Amb (Con 1) (Con 2)))}
+\end{displaymath}
+上，会返回\texttt{"[2,4]"}。如我们所见，在不纯的语言中想要做出用于支持这样效用的更改是很困难的。
+
+\subsection{变体六：反向状态（Backwards state）}
+现在回到~\ref{sec:variation_state}~中的state例子中，惰性求值使一种奇异的变体成为可能：状态可以被反向传播。
+这正是这一小节要说明的。所有需要做的事情实际上只是修改一下\texttt{bindS}的定义：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+m `bindS` k    =  \s2 -> let (a, s0) = m s1
+                             (b, s1) = k a s2
+                         in  (b, s0)
+\end{minted}
+\noindent{}它取最终状态作为输入，并返回初始状态作为输出。像之前一样，值\texttt{a}被\texttt{m}产生出来，
+然后被送入\texttt{k}中。但现在是初始状态被送入\texttt{k}，中间状态从\texttt{k}到\texttt{m}，最终状态
+由\texttt{m}返回。\texttt{let}表达式中的两个clause是互递归的，所以这只能在惰性下工作。
+
+\indent{}定义于~\ref{sec:variation_state}~中的\texttt{Count} term现在返回的是将要在它的求值和执行末端之间
+进行的步数。像之前一样，若我们将\texttt{test}应用到\texttt{(Add (Add (Con 1) (Con 2)) Count)}上，同样会返回
+\texttt{"Value: 4; Count: 2"}，但内部的过程不再一样了：在\texttt{Count}被求值处之后有一次相加发生。一个
+不可解的互依赖（被称为“黑洞”）会出现在这样一种不幸的情况中，即尚未执行的步骤依赖于\texttt{Count}返回的值。
+在这种情况下，解释器会失败并终止，或异常地终止。
+
+\indent{}这个例子似乎表现得有些刻意而为，但这种monad在实践中确实是会出现的。John Hughes 和 Philip Wadler
+在分析一个文本处理算法的时候发现了它，这个算法要从左至右且从右至左地传递信息。
+
+\subsection{Call-by-name 解释器}
+\indent{}在~\ref{sec:interp_monad}~开始时给出的解释器是call-by-value的，这很容易地通过函数的类型看出来。
+其中，函数以类型\texttt{Value -> M Value} 被表示，所以说一个函数的参数是值，尽管函数应用的结果可以
+是一个计算。而与之对应的call-by-name的解释器如下所示（仅给出存在不同之处）。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+data  Value             =  Wrong
+                        |  Num Int
+                        |  Fun (M Value -> M Value)
+
+type  Environment       =  [(Name, M Value)]
+
+interp                  :: Term -> Environment -> M Value
+interp (Var x) e        =  lookup x e
+interp (Con i) e        =  unitM (Num i)
+interp (Add u v) e      =  interp u e `bindM` (\a ->
+                           interp v e `bindM` (\b ->
+                           add a b))
+interp (Lam x v) e      =  unitM (Fun (\m -> interp v ((x,m):e)))
+interp (App t u) e      =  interp t e `bindM` (\f -> apply f (interp u e))
+
+lookup                  :: Name -> Environment -> M Value
+lookup x []             =  unitM Wrong
+lookup x ((y,n):e)      =  if x==y then n else lookup x e
+
+apply                   :: Value -> M Value -> M Value
+apply (Fun h) m         =  h m
+apply f m               =  unitM Wrong
+\end{minted}
+\noindent{}现在，用于表示函数的类型是\texttt{M Value -> M Value}，所以现在函数的参数是一个计算。相似的，环境
+也变了，它不再包含值，而是包含计算。用于解释常量和加法的代码不变。用于变量和lambda抽象的代码看似没有变，但
+实际上发生了微妙的变化：之前，变量被绑定到值，而现在他们被绑定到计算上（因而\texttt{lookup}发生了一点改变）。
+用于函数应用的代码确实改变了：现在是函数被求值，但参数并不。
+
+\indent{}如果修改~\ref{sec:variation_state}~中的执行计数，每次参数被求值时，其开销会被计数。因而对
+\texttt{test term0}求值的话，现在会返回字符串\texttt{"Value 42; Count: 4"}，因为将\texttt{10}加到\texttt{11}上
+的开销会被计数两次。
+
+\indent{}Monadic风格在这里体现出来的好处是，类型使得效用发生之处十分清晰。因而，我们可以通过审视类型来区分
+call-by-value和call-by-name。若用impure的特性，相关行为的线索是很模糊的。
+
+\subsection{Monad 定律}\label{sec:monad_law}
+\noindent{}若要\texttt{(M,unitM,bindM)}是monad，必须满足下面的定律：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               escapeinside = ||,
+               fontsize=\normalsize,
+               %bgcolor=bg,
+               framesep=2mm]{Haskell}
+|$\textrm{Left unit: }$|     (unitM a) `bindM` k  =  k a
+
+|$\textrm{Right unit: }$|    m `bindM` unitM  =  m
+
+|$\textrm{Associative:}\;\,\,$|        m `bindM` (\a -> (k a) `bindM` (\b -> h b))
+              =   (m `bindM` (\a -> k a)) `bindM` (\b -> h b)
+\end{minted}
+\noindent{}这些定律保证了monadic的组合性。它是可结合的，并有左单位元和右单位元。
+
+\indent{}为了说明这些定律的用途，考虑证明\texttt{(Add t (Add u v))}和\texttt{(Add (Add t u) v)}会返回相同的结果
+这一命题。首先对左侧进行化简：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               escapeinside = ||,
+               fontsize=\footnotesize,
+               %bgcolor=bg,
+               framesep=2mm]{Haskell}
+   interp (Add t (Add u v)) e
+=  interp t e            `bindM` (\a ->
+   interp (Add u v) e    `bindM` (\y ->
+   add a y))
+=  interp t e            `bindM` (\a ->
+   (interp u e           `bindM` (\b ->
+    interp v e           `bindM` (\c ->
+    add b c)))           `bindM` (\y ->
+   add a y))
+=  interp t e            `bindM` (\a ->
+   interp u e            `bindM` (\b ->
+   interp v e            `bindM` (\c ->
+   add b c               `bindM` (\y ->
+   add a y))))
+\end{minted}
+\noindent{}上述前两步都是简单的展开，而第三步用到了结合律。相似的，右侧也可被化简为：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               escapeinside = ||,
+               fontsize=\footnotesize,
+               %bgcolor=bg,
+               framesep=2mm]{Haskell}
+   interp (Add (Add t u) v) e
+=  interp t e            `bindM` (\a ->
+   interp u e            `bindM` (\b ->
+   interp v e            `bindM` (\c ->
+   add a b               `bindM` (\x ->
+   add x c))))
+\end{minted}
+至此，还有待证明：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               escapeinside = ||,
+               fontsize=\normalsize,
+               %bgcolor=bg,
+               framesep=2mm]{Haskell}
+add a b `bindM` (\x -> add x c)  =  add b c `bindM` (\y -> add y a)
+\end{minted}
+
+\indent{}我们可以通过分例讨论来证明它。如果\texttt{a}，\texttt{b}和\texttt{c}分别具有
+形式\texttt{Num i}，\texttt{Num j}和\texttt{Num k}，那么左右两侧结果均可以表示
+为\texttt{unitM (i+j+k)}，这一点可由left unit定律和加法的结合性得到。其余情况的结果
+是\texttt{Wrong}，也由left unit定律得到。
+
+\indent{}再来看一个例子。对于每个monad，我们可以定义下述操作：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+mapM        :: (a -> b) -> (M a -> M b)
+mapM f m    =  m `bindM` (\a -> unitM (f a))
+
+joinM       :: M (M a) -> M a
+joinM z     =  z `bindM` (\m -> m)
+\end{minted}
+\noindent{}对于list monad，\texttt{mapM}就是我们所熟知的映射（map）函数，且\texttt{joinM}是列表的连接。
+我们约定\texttt{id}为恒等函数，符号\texttt{(.)}用作函数组合：\texttt{(f.g) x = f (g x)}，则有下述定律：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\normalsize,
+               %bgcolor=bg,
+               framesep=2mm]{text}
+mapM id     =  id                               joinM . unitM       =  id
+mapM (f.g)  =  mapM f . mapM g                  joinM . mapM unitM  =  id
+                                                joinM . mapM joinM  =  joinM . joinM
+mapM f . unitM  =  unitM . f
+mapM f . joinM  =  joinM . mapM (mapM f)        m `bindM` k  =  joinM (mapM k m)
+\end{minted}
+
+\indent{}很多时候，monad并不是利用\texttt{unitM}和\texttt{bindM}给出其定义，而是用\texttt{unitM}，\texttt{joinM}
+和\texttt{mapM}来定义的。这样一来，前述的三条定律就被上面八条定律中的前七条所取代。如果再用第八条定律定义
+\texttt{bindM}，那么前述三条定律亦随之确立。因此，这两种定义是等价的。
+
+\indent{}最后让我们以list monad为例，针对列表推导式的一些表达来看看这两种定义：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+[t]                       =  unitM t                 =  unitM t
+
+[t | x <- u]              =  mapM (\x -> t) u        =  u `bindM` (\x -> unitM t)
+
+[t | x <- u, y <- v]      =  joinM (mapM (\x -> mapM (\y -> t) v) u)
+                          =  u `bindM` (\x -> v `bindM` (\y -> unitM t))
+\end{minted}
+
+\vspace{-0.8em}
+\section{Monad 续.}
+\indent{}这一章的目的是对比monadic风格与延续传递风格（CPS）。
+延续传递风格建立之始的目的是用于 指称语义（denotational semantics）。它为一个程序的执行序提供了
+精细控制，并且作为一种编译器中间语言而流行。本文主要关注点在于CPS的模块化。
+
+\subsection{CPS 解释器}
+\noindent{}延续的monad（即continuation monad）定义如下：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+type  K a      =  (a -> Answer) -> Answer
+
+unitK a        =  \c -> c a
+m `bindK` k    =  \c -> m (\a -> k a c)
+\end{minted}
+
+\indent{}在CPS中，一个（类型\texttt{a}）的值被表示为一个函数，
+这个函数取一个（类型为\texttt{a -> Answer}的）延续\texttt{c}，并将延续应用到那个值上，给出
+（类型为\texttt{Answer}的）最终结果\texttt{c a}。因此，\texttt{unitK a}给出了\texttt{a}的CPS表达。
+若有\texttt{m :: K a}与\texttt{k :: a -> K b}，那么\texttt{m `bindK` k}的行为是：将\texttt{c}绑定到
+当前的延续上；对\texttt{m}求值；将求值结果绑定到\texttt{a}上；在延续\texttt{c}下将\texttt{k}应用到\texttt{a}。
+
+\indent{}与之前我们对解释器进行修改的手法类似，将解释器中的monad \texttt{M}用monad \texttt{K}替换掉，然后做一下
+简化，即可得到CPS下的解释器。
+
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+interp                :: Term -> Environment -> (Value -> Answer) -> Answer
+interp (Var x) e      =  \c -> lookup x e c
+interp (Con i) e      =  \c -> c (Num i)
+interp (Add u v) e    =  \c -> interp u e (\a ->
+                               interp v e (\b ->
+                               add a b c))
+interp (Lam x v) e    =  \c -> c (Fun (\a -> interp v ((x,a):e)))
+interp (App t u) e    =  \c -> interp t e (\f ->
+                               interp u e (\a ->
+                               apply f a c))
+\end{minted}
+\noindent{}函数\texttt{lookup}，\texttt{add}和\texttt{apply}现在都接受延续。定义\texttt{Add}的那一行可以读作：令\texttt{c}为
+当前延续；对\texttt{u}求值；将\texttt{a}绑定到其结果上；对\texttt{v}求值；将\texttt{b}绑定到其结果上；在延续\texttt{c}下
+将\texttt{a}和\texttt{b}加在一起。
+
+\indent{}这个读法和~\ref{sec:what_is_monad}~中的monadic版本非常接近：CPS的版本可以由monadic的版本导出，只要将
+\texttt{`bindM`}丢掉，并在前面和后面加些东西，即捕获和传递延续\texttt{c}。\texttt{`bindM`}的第二个参数具有类型
+\texttt{a -> (b -> Answer) -> Answer}，这是\texttt{k}的范围。延续具有类型\texttt{b -> Answer}，这是\texttt{c}的
+范围。\texttt{k}与\texttt{c}角色相似，它们二者都作为位于不同层次的延续。
+
+\indent{}类型\texttt{Answer}可以是任何足以表示一个计算最终结果的类型。一个选择是让其为一个值。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\normalsize,
+               %bgcolor=bg,
+               framesep=2mm]{Haskell}
+type  Answer    =  Value
+\end{minted}
+\noindent{}这决定了\texttt{showK}的定义。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\normalsize,
+               %bgcolor=bg,
+               framesep=2mm]{Haskell}
+showK m         = showval (m id)
+\end{minted}
+\noindent{}这里\texttt{m :: K Value}将恒等函数\texttt{id}作为延续接受，然后得到的结果\texttt{Value}被转换为字符串形式。
+对\texttt{test term0}求值会得到结果 \texttt{"42"}，和前述结果相同。
+
+\subsection{Call with current continuation（call/cc）}
+\indent{}我们已经将解释器转换成了CPS的，现在我们可以进一步直接加上call-with-current-continuation（call/cc）操作。
+这种操作可见于Scheme和New Jersey的Standard ML。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+callccK        :: ((a -> K b) -> K a) -> K a
+callccK h      =  \c -> let k a = \d -> c a
+                        in  h k c
+\end{minted}
+\noindent{}这个操作捕获当前延续，并将其传入当前表达式。函数\texttt{callccK}的参数是一个函数\texttt{h}，这个函数\texttt{h}
+以类型为\texttt{a -> K b}的函数\texttt{k}为参数。如果\texttt{k}以参数\texttt{a}进行调用，它会忽略它的延续\texttt{d}，然后
+将\texttt{a}传入已捕获到的延续\texttt{c}中。
+
+\indent{}现在，我们将call/cc加入到解释器语言中来，我们为当前的语言添加一个合适的term，并为解释器增加一个新的case。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+data  Term               =  ... | Callcc Name Term
+
+interp (Callcc x v) e    =  callccK (\k -> interp v ((x, Fun k):e))
+\end{minted}
+\noindent{}\texttt{callccK}被用来捕获当前的延续\texttt{k}，并且\texttt{x}被绑定到一个行为与\texttt{k}一样的函数上，并被加入环境。
+在这样的环境下，对\texttt{v}进行求值。
+
+\indent{}举个例子来看看它的工作方式。将\texttt{test}应用到
+\begin{displaymath}
+\textrm{\texttt{(Add (Con 1) (Callcc "k" (Add (Con 2) (App (Var "k") (Con 4)))))}}
+\end{displaymath}
+上，会得到结果 \texttt{"5"}。
+
+\subsection{Monads与CPS}
+\indent{}我们已经看到了，通过选择合适的monad，monad解释器成为了一个CPS解释器。反过来也是成立的：通过选择合适的
+解答空间（space of answers），一个CPS解释器可以表现为一个monad解释器。
+通用（general）技巧如下。要在CPS下达到与monad \texttt{M}相同的效用，我们可以重定义answer类型，使其
+包含\texttt{M}的一个application：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\normalsize,
+               %bgcolor=bg,
+               framesep=2mm]{Haskell}
+type  Answer    =  M Value
+\end{minted}
+\noindent{}\texttt{showK}的定义也相应地被修改：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\normalsize,
+               %bgcolor=bg,
+               framesep=2mm]{Haskell}
+showK n         =  showM (n unitM)
+\end{minted}
+\noindent{}这里\texttt{n :: K Value}接受\texttt{unitM :: Value -> M Value}作为延续。
+
+\indent{}就像\texttt{unitM}将一个类型为\texttt{a}的值转换为类型\texttt{M a}一样，类型为\texttt{M a}的值可以被转换为
+类型为\texttt{K a}的值，转换方式如下：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+promoteK      :: M a -> K a
+promoteK m    =  \c -> m `bindM` c
+\end{minted}
+\noindent{}因为有\texttt{m :: M a}和\texttt{c :: a -> M Value}，则\texttt{m `bindM` c}的类型是\texttt{M Value}，即为所需。
+
+\indent{}举个例子，若要将错误消息纳入，我们取\texttt{M}为monad \texttt{E}，然后做下述计算：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+errorK      :: String -> (a -> E Value) -> E Value
+errorK s    =  promoteK (errorE s)
+            =  \c -> (errorE s) `bindE` c
+            =  \c -> Error s    `bindE` c
+            =  \c -> Error s
+\end{minted}
+\noindent{}通过分别应用\texttt{promoteK}，\texttt{errorE}和\texttt{bindE}的定义来得出该等式。我们可以取最后一行作为
+\texttt{errorK}的定义。就像我们所期望的那样，这会简单地扔掉延续并返回错误作为最终结果。
+
+\indent{}上一节强调了monad支持模块化。举例来说，为了处理错误，仅需对monadic的解释器做一点修改：将monad \texttt{M}替换
+为monad \texttt{E}，并在合适的位置引入对\texttt{errorE}的调用。CPS也以相似的方式支持模块化。例如，为了处理错误，对CPS
+解释器做出的修改也同样很简单：仅需改变\texttt{Answer}和\texttt{test}的定义，并在合适的位置引入对\texttt{errorK}的调用。
+
+\indent{}执行计数（见~\ref{sec:variation_state}~节）与输出（见~\ref{sec:output}~节）可以用相似的方式被纳入CPS。对于
+执行计数，我们可以取\texttt{Answer = S Value}，并计算\texttt{tickS}的一个延续版本。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+tickK    :: (() -> S Value) -> S Value
+tickK    =  promoteK tickS
+         =  \c -> tickS `bindS` c
+         =  \c -> (\s -> ((), s+1)) `bindS` c
+         =  \c -> \s -> c () (s+1)
+\end{minted}
+\noindent{}对于输出，我们可以取\texttt{Answer = O Value}，并计算\texttt{outO}的一个延续版本。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+outK      :: Value -> (Value -> O Value) -> O Value
+outK a    =  promoteK (outO a)
+          =  \c -> (outO a) `bindO` c
+          =  \c -> (showval a ++ "; ", ()) `bindO` c
+          =  \c -> let (s,b) = c () in (showval a ++ "; " ++ s, b)
+\end{minted}
+\noindent{}对于这两种情形，对CPS解释器版本的修改与像我们修改monadic的对应版本一样简单。
+
+\subsection{Monads vs. CPS}
+\indent{}上一节我们阐明了monad与CPS间的关系。一点令人好奇之处是，在monad与CPS之间是否存在真正的不同点。
+对于monad，我们可以写出\texttt{m `bindM` (\textbackslash a -> k a)}；
+对于CPS，我们可以写出\texttt{(\textbackslash c -> m (\textbackslash a -> k a c))}。
+具体要选哪一种，似乎只不过是偏好性的问题。
+
+\indent{}实际上，的确是有不同之处的。我们所描述的每个monad类型都可能转变成抽象数据类型（abstract data type），并可
+在某种程度上提供比CPS更为精细的控制。比如，我们已经看到，monad类型 \texttt{S a}的CPS类似物是下述类型：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\normalsize,
+               %bgcolor=bg,
+               framesep=2mm]{Haskell}
+(a -> S Value) -> S Value.
+\end{minted}
+\noindent{}后一种类型包含了诸如下类的值：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\normalsize,
+               %bgcolor=bg,
+               framesep=2mm]{Haskell}
+\c -> \s -> (Wrong, c)
+\end{minted}
+\noindent{}这提供了一种错误逃逸：它忽略了当前的延续，并总是返回\texttt{Wrong}，而state monad \texttt{S}则无此便利。对于
+monad，我们可以选择是否要提供逃逸能力，而CPS没办法做这种选择。
+
+\indent{}或许在它们二者之间的一个更有意义的区别是看待问题视角的不同。Monad将注意力集中在需要什么抽象
+操作，这些操作需要满足什么定律，如何将不同monad所表达的特性进行结合的问题上。
+
+
+\section{体验Monads}
+\noindent{}Haskell编译器的每个阶段都与monad相关：
+\begin{itemize}
+\item 类型推导阶段使用了一个monad，它带有一个error部分（与~\ref{sec:err_msg}~中的\texttt{E}类似），
+一个position部分（与~\ref{sec:err_msg_pos}~中的\texttt{P}类似）和两个
+state部分（与~\ref{sec:variation_state}~中的\texttt{S}类似）。对于两个state部分，其一用作name supply以产生独一无二
+的新变量名。另一是current 代换，用于unification。
+\item \textsl{Simplification}阶段使用了一个monad，它带有一个用作name supply 的state部分。
+\item 代码生成阶段使用了一个带有三个state部分的monad：
+    \begin{itemize}
+        \item 一个list用来放到目前为止生成的代码
+        \item 一个table用于将变量名与寻址模式进行关联
+        \item 另一个table用于缓存执行期栈状态的已知内容
+    \end{itemize}
+\end{itemize}
+
+\indent{}在每种情况下，monad的使用都极大地简化了薄记（bookkeeping）工作。如果类型推导器需要在每一步都明确地提及当前替
+换，name supply和error信息是如何传播的，就会变得非常混乱。
+
+\end{document}

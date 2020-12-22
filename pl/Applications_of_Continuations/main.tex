@@ -1,0 +1,690 @@
+\documentclass[12pt]{article}
+\input{setting.tex}
+\renewcommand{\thesection}{\Roman{section}}
+\renewcommand{\thesubsection}{\thesection-\arabic{subsection}}
+
+\title{Applications of Continuations}
+\author{Yiteng Zhang}
+
+\begin{document}
+\maketitle
+
+\noindent{}\textbf{注：}本文译自Daniel P. Friedman的讲义文章\textsl{Applications of Continuations}（延续的应用）。
+为了表达上的准确性，仍保留相关术语在原文中的描述。附录A未被包含，可直接参阅原文。
+~\\
+
+\noindent{}\textbf{文章的构成}：这篇讲义分为三个部分。第一部分我们主要通过例子来定义一些关键的术语。这些术语是
+常规过程（conventional procedures），逃逸过程（escape procedures） 和延续（continuations）。\texttt{lambda\^{}}和\texttt{call/cc}
+的原始概念会被展示。在第二部分中，我们会构建一些简单应用的例子，特别是一个简单的类-LISP的\texttt{BREAK}过程，和一个
+无限循环但可从中跳出的\texttt{CYCLE}过程。在这一节中我们还指出，如果所有的过程都是以延续传递风格（continuation-passing-style）
+写成的，那么\texttt{call/cc}并不是严格必须的。即使是 LISP 的 \texttt{PROG} 这种不受欢迎的 GO TO 风格的的编程，在正确
+使用 \texttt{call/cc} 的情况下也显得很合理。在最后一节里，我们为同步进程开发了一个 \texttt{DISPATCHER}。最后我们还将两个
+附录包含了进来。在附录A中，我们展示了一个用于一个包含\texttt{call/cc}和\texttt{lambda\^{}}的Scheme子集的完全柯里化版本的
+元循环（meta-circular）解释器。在附录B中，我们包含了测试\texttt{DISPATCHER}所需的剩余代码。
+
+\section{关键术语与定义}
+\subsection{Scheme的特性}
+\indent{}Scheme 编程语言是一种带有头等过程（first-class procedures）的传值调用（call-by-value）词法作用域LISP方言。
+正确的尾递归（tail-recursive）是强加于其任何实现上的一个条件。简单来说，这意味着在不必要时不会有调用栈的增长。特别是，
+以递归形式编写的简单循环的开销会最小化。Scheme语言具有一个函数式的子集，但其完整的语言集合支持一些命令式（imperative）的
+概念，比如输入/输出（input/output），给词法变量（lexical variables）赋值，以及一级延续（first-class continuations）。
+
+\subsection{逃逸过程（escape procedure）的描述}
+\noindent{}让我们考虑下面的简单表达式：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (* (/ 24 (f 0)) 3)
+\end{minted}
+\noindent{}一些可能的结果：
+\begin{enumerate}
+    \item \texttt{(f 0)} 是 4，因而结果是18；
+    \item \texttt{f}在0处未定义，引发一条错误信息，并使得计算过程被抛弃；
+    \item \texttt{f}在0处未定义，导致无穷循环。比如说：
+    \begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+        (define f
+          (lambda (n)
+            (if (zero? n) (f n) n)))
+    \end{minted}
+    \item \texttt{(f 0)}是4，但是\texttt{f}是一个逃逸过程，因而结果是4。
+\end{enumerate}
+
+\subsection{用于表征逃逸过程的符号}
+\indent{}我们引入一个记号来表征逃逸过程：如果\texttt{f}是一个过程，那么与它对应的逃逸过程是\texttt{f\^{}}。\texttt{f\^{}}
+做的事情与\texttt{f}是一样的，不过\texttt{(f\^{} ...)}会作为结果逃逸出来，并随之被输出。有时这被称
+为``逃逸到顶层''或``读取-求值-输出循环''（read-eval-print loop）。
+
+\indent{}最简单的逃逸过程是与恒等函数\texttt{I}对应的过程。如果\texttt{f\^{}}$=$\texttt{I\^{}}，那么之前的结果会是0，不会有
+除法运算发生。一个更为强大的逃逸函数是\texttt{+\^{}}，让我们考虑：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (* 3 (+^ 4 5))
+\end{minted}
+其结果是9。注意这和\texttt{(* 3 (I\^{} (+ 4 5)))}的结果相同。
+
+\subsection{调用逃逸过程即是替换调用栈}
+\indent{}对于上面的表达式，当在调用\texttt{(+\^{} 4 5)}时，调用栈的内容是<\texttt{3}, \texttt{*}>。调用逃逸过程
+的作用是使调用栈当前的内容被放弃，只处理\texttt{+\^{}}和其参数。尽管\texttt{(I\^{} (+ 4 5))} 和 \texttt{(+\^{} 4 5)}
+的结果相同，它们在具体操作上却并不相同。\texttt{(I\^{} (+ 4 5))}的调用栈会有更多的增长。这一点对调用栈增长的理解会
+在后面有关更为复杂的逃逸过程的讨论中起到重要作用。
+
+\subsection{\texttt{lambda\^{}}：一般逃逸过程的创建器}
+\indent{}给定一个任意的 lambda 表达式，我们可以构建出与之对应的逃逸过程。也就是，从表达式\texttt{(lambda (x) ...)}
+得到\texttt{(lambda\^{} (x) ...)}。目前我们先假设能够进行这种构建，至于具体如何从\texttt{lambda}过程构建\texttt{lambda\^{}}，会
+在后面进行阐述。
+
+\subsection{\texttt{call/cc}：作为逃逸过程创建器}
+\indent{}Scheme内置了用于创建逃逸过程的特性，并提供给用户使用。这些逃逸过程对应于运行时的调用栈，而运行时调用栈对应于延续语义中
+的延续，因而这些特别的逃逸过程也常被称为延续或延续对象。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (call-with-current-continuation e)
+\end{minted}
+\noindent{}这行代码的效果是调用\texttt{(e k\^{})}。其中，\texttt{k\^{}}是对应于表达式
+实例\texttt{(call-with-current-continuation e)}的 逃逸过程。这可以被简写成\texttt{(call/cc e)}。
+
+\subsection{描述由\texttt{call/cc}创建的逃逸过程}
+\noindent{}比如，如果我们有这样的表达式：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (+ 3 (call/cc (lambda (k^) ...)))
+\end{minted}
+\noindent{}那么\texttt{k\^{}}可以通过用一个新的变量（比如\texttt{v}）来取代\texttt{call/cc}表达式进行构建，
+然后用\texttt{v}对结果进行抽象：\texttt{k\^{} = (lambda\^{} (v) (+ 3 v))}。
+
+\subsection{一个\texttt{call/cc}的简单例子}
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (+ (call/cc
+          (lambda (k^)
+            (/ (k^ 5) 4)))
+       8)
+\end{minted}
+$\Longrightarrow$ 首先构建 \texttt{k\^{} = (lambda\^{} (v) (+ v 8))}\\
+$\Longrightarrow$ 用\texttt{k\^{}}对\texttt{(/ (k\^{} 5) 4)}进行求值\\
+$\Longrightarrow$ 对\texttt{(k\^{} 5)}进行求值\\
+$\Longrightarrow$ 由于\texttt{k\^{}}是逃逸过程，除法过程被丢掉。最终得到结果13。
+
+\subsection{延续描述的是余下的计算部分}
+\noindent{}让我们通过一个例子来说明这件事：
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (* (+ (call/cc
+            (lambda (k^)
+              (/ (k^ 5) 4)))
+          8)
+       3)
+\end{minted}
+$\Longrightarrow$ 首先构建 \texttt{k\^{} = (lambda\^{} (v) (* (+ v 8) 3))}\\
+$\Longrightarrow$ 对 \texttt{(/ (k\^{} 5) 4)}求值
+$\Rightarrow$ 对 \texttt{(k\^{} 5)}求值\\
+$\Longrightarrow$ 对 \texttt{((lambda\^{} (v) (* (+ v 8) 3)) 5)}求值\\
+$\Longrightarrow$ 得到结果39。
+
+\vspace{0.5em}
+\noindent{}延续描述的是接下来还要做的事情，在上面这个例子里，对应于很直接的算数运算。实际上，接下来要做的事情，
+或者说余下的计算，可以是任意定义的。我们再展示一个稍微复杂一点的例子：
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (* (+ (let ([u (+ 3 2)])
+            (call/cc
+              (lambda (j^)
+                (/ (j^ u) 4)))) 8) 3)
+\end{minted}
+\noindent{}在这个例子里，\texttt{let}部分的``\texttt{u} 为 5''发生于确定\texttt{j\^{}}之前。该例中的延续\texttt{j\^{}}
+与上面例子里的\texttt{k\^{}}是相同的。因为\texttt{(+ 3 2)}是 5，所以这两个例子给出了相同的结果。
+
+\subsection{延续是第一类对象（first-class objects）}
+\indent{}利用\texttt{call/cc}，我们可以选择将逃逸过程存起来，直到在后面的计算中才去调用它。这里我们再来看一个例子，
+这在个例子中我们将逃逸过程像变量一样存起来，存起来后可以在后面使用。
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (+ (call/cc
+         (lambda (k^)
+           (begin
+             (set! +8^ k^)
+             (display "inside body")
+             5)))
+       8)
+\end{minted}
+$\Longrightarrow$ 首先构建 \texttt{k\^{} = (lambda\^{} (v) (+ v 8))}\\
+$\Longrightarrow$ 对 \texttt{(begin ...)}部分进行求值\\
+$\Longrightarrow$ 词法变量 \texttt{+8\^{}}被置为 \texttt{(lambda\^{} (v) (+ v 8))}\\
+$\textrm{$\;\;$}\quad$ 字符串\texttt{"inside body"} 被打印\\
+$\textrm{$\;\;$}\quad$ 值5被作为\texttt{(begin ...)}部分的结果返回\\
+$\Longrightarrow$ 整个表达式的结果是13。
+
+\vspace{0.5em}
+\noindent{}之后我们还可以使用\texttt{+8\^{}}，比如\texttt{(* (/ (+8\^{} 35) 0) 100)}会得到43。
+
+\section{元编程（Meta-Programming）}
+\subsection{\texttt{call/cc}的默认法则}
+\indent{}在之前的例子中，之所以5会被送给等待中的\texttt{+}，是因为我们说：
+\begin{displaymath}
+    \textrm{\texttt{(call/cc (lambda (k\^{}) e))}} = \textrm{\texttt{(call/cc (lambda (k\^{}) (k\^{} e)))}}
+\end{displaymath}
+也就是说，等待结果的延续与\texttt{call/cc}所创建的逃逸过程是相同的。从这个等式中，我们可以知
+道\texttt{e}默认为\texttt{(k\^{} e)}。因而，下面这个例子的结果是\texttt{(k\^{} 5)}，仍为13。
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (+ (call/cc
+         (lambda (k^)
+           (k^ (begin
+                 (set! +8^ k^)
+                 (display "inside body")
+                 5))))
+       8)
+\end{minted}
+
+\subsection{\texttt{call/cc}的默认法则对\texttt{lambda\^{}}不成立}
+\indent{}通过将\texttt{call/cc}应用到一个逃逸过程（即一个\texttt{(lambda\^{} ...)}过程）上的这种逃逸，会强加给用户
+更多的控制责任，用户需要对``从被应用的逃逸过程的程序体中退出''做出决策。我们来看一看下面的两个例子，以对
+这件事情有更多地理解：
+\begin{align*}
+&\textrm{\texttt{(+ 3 (call/cc (lambda\^{} (k\^{}) (k\^{} 8))))}} \quad\rightarrow \quad\textrm{Here we would get: 11}\\
+&\textrm{\texttt{(+ 3 (call/cc (lambda\^{} (k\^{}) 8)))}} \quad\rightarrow \quad \textrm{But here we would just get: 8}
+\end{align*}
+
+\indent{}如果使用我们上面提到的\texttt{call/cc}的默认法则，似乎两个例子应该是等价的。不过，需要注意上面的法则中用到的是
+\texttt{(lambda ...)} 而非 \texttt{(lambda\^{} ...)}。需要记住的是，\texttt{call/cc}可能会作用于常规过程或逃逸过程，
+而延续总是一个类似于\texttt{k\^{}}的逃逸过程。
+
+\subsection{一个简单的类-LISP的\texttt{BREAK}}
+\indent{}通过将延续存下来，我们可以写出一个\texttt{BREAK} 过程，并可让用户自行决定计算的\texttt{RESUME}。当调用\texttt{BREAK}
+时，一个消息会被返回至顶层。之后，系统的监听循环将处于受控状态，直到用户执行\texttt{(RESUME ...)}，在那时送往\texttt{RESUME}
+的参数是原本\texttt{(BREAK ...)} 调用的值。
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (define BREAK
+      (lambda (message)
+        (call/cc
+          (lambda (k^)
+            (set! RESUME k^)
+            ((lambda^ (x) x) message)))))
+\end{minted}
+\noindent{}\texttt{BREAK}是一个通过使用一级延续得到优雅解决方案的十分有趣的例子。Brian Smith 选择了一个更为复杂
+的\texttt{BREAK}版本作为反射（reflection）的例子%
+\footnote{Smith, Brian Cantwell. Reflection and semantics in Lisp. ACM POPL, 1984, 23-35.}。
+
+\subsection{如何构建\texttt{lambda\^{}}}
+\indent{}让我们来考虑如何构建\texttt{(lambda\^{} (i ...) e ...)}，并注意为何我们不能将\texttt{(lambda\^{} ...)}看作Scheme的
+一部分，而必须总是在运行时构建它。我们定义一个过程\texttt{INVOKE/NO-CONT}，它取一个无参过程\texttt{f}作为参数，并像调用
+一个逃逸过程一样调用\texttt{f}过程。那么可以将\texttt{lambda\^{}}表示为：
+\begin{align*}
+&\textrm{\texttt{(lambda\^{} (id ...) e ...)}}\\ &\;\;\equiv \\
+&\textrm{\texttt{(lambda (id ...) (INVOKE/NO-CONT (lambda () e ...)))}}
+\end{align*}
+\noindent{}下面是\texttt{make-INVOKE/NO-CONT}过程：
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (define make-INVOKE/NO-CONT
+      (lambda ()
+        ((call/cc
+           (lambda (k^)
+             (set! INVOKE/NO-CONT (lambda (th) (k^ th)))
+             (lambda () 'INVOKE/NO-CONT))))))
+\end{minted}
+\indent{}必须在顶层调用\texttt{(make-INVOKE/NO-CONT)}。可以看到，在\texttt{INVOKE/NO-CONT}的构建中，\texttt{k\^{}}实际上
+是不带延续的\texttt{(lambda\^{} (v) (v))}。因此，我们是在“空的”或“顶层”延续中调用一个无参过程（注意到包围\texttt{call/cc}
+的双层括号）。通过将\texttt{INVOKE/NO-CONT}绑定到一个唯一目的是调用其参数的过程上，我们可以保证没有延续在等待它的结果。
+
+\subsection{延续传递风格（continuation-passing-style）}
+\indent{}下面的程序会给出一个二叉搜索树所有节点值之和。另外，如果给定的二叉搜索树中的某个节点
+的值为0，则会给出0作为最终结果。这里我们使用\texttt{call/cc}来产生逃逸过程，并在发现某个节点的值为零时直接
+返回最终结果，通过\texttt{exit\^{}}跳出来。
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (define sum-bst
+      (lambda (t)
+        (call/cc
+          (lambda (exit^)
+            (letrec
+              ([sum-bst
+                 (lambda (t)
+                   (cond
+                     [(null? t) 0]
+                     [(zero? (info t)) (exit^ 0)]
+                     [else (+ (info t)
+                              (sum-bst (left t))
+                              (sum-bst (right t)))]))])
+              (sum-bst t))))))
+\end{minted}
+\indent{}上述过程可以被等价地用延续传递风格进行改写，如下程序片段所示。这样的程序经过练习就可以读懂和写出。
+具体分析一下，考虑\texttt{else} 那一行，它的意思是：想象你有左子树的对应结果并记为\texttt{result1}，然后想象你有右子树
+对应的结果并记为\texttt{result2}，之后取根节点的值与\texttt{result1}和\texttt{result2}之和，并将其传给
+等待中的延续\texttt{k}。零检测那一行意味着抛弃等待着的延续，并将值0返回给\texttt{bst}原始调用者的延续。
+这可能有点别扭，但真正困难之处在于这种风格具有“感染性”，也就是说，在使用这种风格的同时也会将其意志强加给每个
+程序。举个例子，如果使用了一个映射过程，那么要被映射的过程也会需要是以这种风格写成的。
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (define sum-bst
+      (lambda (t)
+        (letrec
+          ([sum-bst
+             (lambda (t k)
+               (cond
+                 [(null? t) (k 0)]
+                 [(zero? (info t)) 0]
+                 [else (sum-bst (left t)
+                         (lambda (result1)
+                           (sum-bst (right t)
+                             (lambda (result2)
+                               (k (+ (info t) result1 result2))))))]))])
+          (sum-bst t (lambda (x) x)))))
+\end{minted}
+\indent{}引用James S. Miller的话\footnote{Miller, James S. Multischeme: A Parallel Processing System
+Based on MIT Scheme. MIT Ph.~D dissertation, 1987.}：“不幸的是，通过转换过程产生的程序往往是难以理解的。关于不需要在
+Scheme中加入延续的论点实际上是正确的。它和这句话一样，都是有道理的：形式参数的名称可以是任选的。而且，这些论点
+都有着相同的基本瑕疵：一条陈述被写下的形式对人们是否容易理解它是有重大影响的。尽管理解到语言不需要固有地对
+延续提供任何支持，Scheme社区仍然选择在语言中加入一个操作来减轻繁琐性。”
+
+\subsection{用\texttt{call/cc}做元编程：\texttt{CYCLE}}
+\noindent{}\texttt{CYCLE}与\texttt{EXIT-CYCLE-WITH}一起用于无限循环。
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (define CYCLE
+      (lambda (f)
+        (call/cc
+          (lambda (k^)
+            (letrec ([loop (lambda ()
+                             (f k^)
+                             (loop))])
+              (loop))))))
+\end{minted}
+\noindent{}\texttt{CYCLE}的协议满足：
+\begin{displaymath}
+\textrm{\texttt{(CYCLE (lambda (EXIT-CYCLE-WITH) e ...))}}
+\end{displaymath}
+\noindent{}期望是在\texttt{e ...}中的某处有至少一次\texttt{(EXIT-CYCLE-WITH ...)}调用。这样一来，无限循环
+以遇到的第一个\texttt{(EXIT-CYCLE-WITH ...)}结束。
+
+\subsection{带有\texttt{GO}与\texttt{RETURN}的LISP之\texttt{PROG}：“GO TO”编程再探}
+\noindent{}让我们考虑一下LISP的\texttt{PROG}：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               escapeinside=||,
+               framesep=2mm]{text}
+    (PROG (id ...)
+      label|$_1$| e|$_1$| ...
+      ...
+      label|$_{n-1}$| e|$_{n-1}$| ...
+      label|$_{n}$| e|$_{n}$| ...)
+    |$\equiv$|
+    (let ([id '()] ...)
+      ((call/cc
+        (lambda (GO)
+          (let ([RETURN (lambda (v) (GO (lambda () v)))])
+            (letrec
+              ([label|$_1$| (lambda () e|$_1$| ... (label|$_2$|))]
+               ...
+               [label|$_{n-1}$| (lambda () e|$_{n-1}$| ... (label|$_n$|))]
+               [label|$_n$| (lambda () e|$_n$| ... (RETURN '()))])
+              (label|$_1$|)))))))
+\end{minted}
+\noindent{}这样的定义让我们避免任何丢失尾递归的风险。即便是包含怪异代码的程序，比如
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (begin
+      (GO x)
+      (print 3))
+\end{minted}
+\noindent{}它仍会像是只有\texttt{(GO x)}那样执行。我们仅需要调用\texttt{(label$_i$)}而非\texttt{(GO label$_i$)}的
+原因是这些特别的调用总是处于尾递归的位置。
+
+\indent{}严格来说这些定义比必要的更具一般性。比如说，在\texttt{e ...}中可能有\texttt{(f label$_i$)}，\texttt{(f RETURN)}，
+和\texttt{(f GO)}这样的实例。并且，\texttt{label$_i$}，\texttt{RETURN}和\texttt{GO}可能会被存起来以备后用。这就是
+一些用于非盲（non-blind）回溯的机制，例如\texttt{a-bien-tot}与\texttt{au-revoir}的实现方式。
+
+\section{同步进程（Synchronous Processes）}
+
+\subsection{延续作为同步进程}
+\indent{}我们接下来从面向进程的角度来审视延续。一个延续表示了控制点，我们可以用它来实现进程。一个进程调度器
+可以基于延续的就绪队列（ready queue）来设计。
+
+\indent{}如果我们考虑一列表达式\texttt{(begin S$_1$ S$_2$ ...)}，那么无论\texttt{S$_i$}何时绑定到一个延续，
+它的延续看起来像是\texttt{(lambda\^{} (waste) S$_{i+1}$ S$_{i+2}$ ...)}。它们被称为
+命令延续（command continuations），因为我们对延续调用的值本身并不感兴趣。我们选用名字“waste”来展示这一点。
+举个例子，对于：
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (define foo
+      (lambda ()
+        (display 2)
+        (call/cc (lambda (ak^) ...))
+        (display 3)
+        (call/cc (lambda (bk^) ...))
+        (display 5)
+        (call/cc (lambda (ck^) ...))
+        (display 7)))
+\end{minted}
+\noindent{}如果我们在顶层调用\texttt{foo}（没有上下文），那么：
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{text}
+    ak^ = (lambda^ (waste)
+            (display 3)
+            (call/cc (lambda (bk^) ...))
+            (display 5)
+            (call/cc (lambda (ck^) ...))
+            (display 7))
+
+    bk^ = (lambda^ (waste)
+            (display 5)
+            (call/cc (lambda (ck^) ...))
+            (display 7))
+
+    ck^ = (lambda^ (waste)
+            (display 7))
+\end{minted}
+
+\subsection{语言的扩展}
+\indent{}我们扩展语言，并引入\texttt{(PAUSE-HANDLER)}。如果在我们的例子中
+将\texttt{(call/cc (lambda (ik\^{}) ...))}用一个过程调用\texttt{PAUSE-HANDLER}取代，我们就得到像这样的片段：
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (define foo
+      (lambda ()
+        (display 2)
+        (PAUSE-HANDLER)
+        (display 3)
+        (PAUSE-HANDLER)
+        (display 5)
+        (PAUSE-HANDLER)
+        (display 7)))
+\end{minted}
+\noindent{}那么，\texttt{PAUSE-HANDLER}的过程就会负责\texttt{call/cc}。
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (define PAUSE-HANDLER
+      (lambda ()
+        (call/cc
+          (lambda (k^)
+            ... ...))))
+\end{minted}
+\noindent{}剩下就是决定要用已经绑到\texttt{call/cc}上的延续去做的事情。在这个简单的例子里，我们会：
+\begin{enumerate}
+\item 将延续插入进程队列
+\item 从队列前端删掉\texttt{k\^{}}（即进程对象）
+\item 调用延续\texttt{k\^{}}
+\end{enumerate}
+因而我们将\texttt{PAUSE-HANDLER}定义为：
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (define PAUSE-HANDLER
+      (lambda ()
+        (call/cc
+          (lambda (k^)
+            (swap-run the-process-q k^)))))
+\end{minted}
+
+\subsection{交换和执行当前进程}
+\noindent{}\texttt{swap-run}会做上面提到的三件事。
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (define swap-run
+      (lambda (q k^)
+        (q 'en-q! k^)
+          (RUN (q 'de-q!))))
+
+    (define RUN (lambda (k^) (k^ 'waste)))
+\end{minted}
+\noindent{}\texttt{RUN}调用从队列前端被取出的延续。
+
+\subsection{创建进程}
+现在留下的仅有的问题是建立用于进程的协议：“使用\texttt{PAUSE-HANDLER}的代码”。
+当没有东西要处理的时候，我们应该怎么办呢？一个简单的解决方法是要求插入一个\texttt{HALT}命令。
+我们通过引入\texttt{CREATE-PROCESS}阐明这个协议。进程，就像从其中刻画出来的延续一样，必须是带有
+一个参数的过程。
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (define CREATE-PROCESS
+      (lambda (th)
+        (lambda (v)
+          (th)
+          (HALT))))
+\end{minted}
+
+\subsection{\texttt{HALT}与\texttt{DISPATCHER}}
+\indent{}我们接下来定义\texttt{DISPATCHER}过程，将其作为一个简单的同步进程调度器。每当\texttt{DISPATCHER}被
+调用，一个新的队列就被创建出来。通过\texttt{(create-q exit\^{})}创建的队列用\texttt{exit\^{}}延续构建。
+无论何时试图从空队列删除一个进程时，队列会调用\texttt{exit\^{}}延续，这将退出\texttt{DISPATCHER}。如果
+队列并不为空，我们就成功地从队列中删除一个元素并\texttt{RUN}它。我们将\texttt{PAUSE-HANDLER}包含进\texttt{DISPATCHER}
+的定义中，这样它就会覆盖自由变量\texttt{the-process-q}。
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+    (define DISPATCHER
+      (lambda (initialize-q)
+        (call/cc
+          (lambda (exit^)
+            (let ([the-process-q (create-q exit^)])
+              (set! HALT
+                (lambda ()
+                  (RUN (the-process-q 'de-q!))))
+              (set! PAUSE-HANDLER
+                (lambda ()
+                  (call/cc
+                    (lambda (k^)
+                      (swap-run the-process-q k^)))))
+              (initialize-q the-process-q)
+              (HALT))))))
+\end{minted}
+\noindent\texttt{DISPATCHER}的调用者将一个取一个队列为参数的过程传入。这个过程在第一个进程\texttt{RUN}ning
+之前被调用。我们使用它来初始化队列。
+
+\section{附录B：\texttt{DISPATCHER}的支持代码}
+\indent{}在附录B中，我们会展示如何使用\texttt{initialize-q}过程，并提供执行\texttt{DISPATCHER}所必须的全部代码。
+由\texttt{create-q}创建的队列会对消息\texttt{en-q!}与\texttt{de-q!}进行响应。如果尝试从一个空的队列删除
+东西，那么作为\texttt{create-q}的参数被传入的延续会被调用。如果有入队操作在先，那么测试空队列就是不需要的。
+一个好的实践是添加将\texttt{en-q!}和\texttt{de-q!}动作结合而成的新的消息。那么\texttt{swap-run}就成为了
+\texttt{(RUN (q 'en-q-de-q! k\^{}))}。
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+(define create-q
+  (lambda (where-to-exit-when-empty^)
+    (let ([head '()] [tail t])
+      (lambda msg
+        (case (car msg)
+          [en-q! (if (null? head)
+                     (begin (set! head (cons (cadr msg) head))
+                            (set! tail head))
+                     (begin (set-cdr! tail (cons (cadr msg) '()))
+                            (set! tail (cdr tail))))]
+          [de-q! (if (null? head)
+                     (where-to-exit-when-empty^ 'done)
+                     (begin0 (car head)
+                             (if (eq? head tail)
+                                 (set! head '())
+                                 (set! head (cdr head)))))])))))
+\end{minted}
+\noindent{}过程\texttt{process-maker}，\texttt{build-q}和\texttt{test}创建了一个测试程序。
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Racket}
+(define process-maker
+  (lambda (n)
+    (CREATE-PROCESS
+      (lambda ()
+        (display n)
+        (PAUSE-HANDLER)
+        (newline)
+        (display "about to halt")
+        (newline)
+        (PAUSE-HANDLER)
+        (display n)))))
+
+(define build-q
+  (lambda (maker n)
+    (lambda (q)
+      (letrec
+        ([loop (lambda (n)
+                 (cond
+                  [(zero? n) 'queue-built]
+                  [else (q 'en-q! (maker n))
+                        (loop (sub1 n))]))])
+        (loop n)))))
+
+(define test
+  (lambda ()
+    (DISPATCHER (build-q process-maker 8))))
+\end{minted}
+
+\end{document}

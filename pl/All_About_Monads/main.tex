@@ -1,0 +1,32 @@
+\documentclass[12pt]{article}
+\input{setting.tex}
+\renewcommand{\thesection}{\Roman{section}}
+\renewcommand{\thesubsection}{\thesection-\arabic{subsection}}
+
+\title{All About Monads}
+\author{Yiteng Zhang}
+
+\begin{document}
+\maketitle
+
+\noindent{}\textbf{注：}时至今日，网络上有关monad的介绍数不胜数，大都冠以“理解monad”此类标题。多读文章
+定是有所助益的，但若能在那之前将基本概念了解透彻，必能事半功倍。Haskell Wiki提供的tutorial文章
+\textit{All About Monads}（关于单子的一切）就是这样一篇能够帮助我们稳固基础的上好材料。这篇文章是对
+它的简译，以便日后的回顾与研习。原文较长，这里不求详尽，仅涵盖“monad变换器剖析”一节之前的内容。其后
+的大量例子对monad变换器有更深入的讨论，直接阅读原文较好。
+
+\vspace{0.5em}
+\noindent{}这篇tutorial介绍了monad和monad变换器（monad transformer）的相关概念，并带领我们观览了
+很多常用的monad。文章主要分为三个部分：第一部分是对monad基本概念的介绍，并说明了Haskell对monad的支持；
+第二部分重点介绍了九种常用的monad，并分别给出了相关例子；第三部分介绍了monad在现实中的应用，并针对monad变换器进行了阐述。
+
+\vspace{-0.5em}
+\input{understand_monads.tex}
+\clearpage
+
+\input{catalog_monads.tex}
+\clearpage
+
+\input{real_world_monads.tex}
+
+\end{document}

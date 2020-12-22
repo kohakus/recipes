@@ -1,0 +1,315 @@
+\documentclass[12pt]{article}
+\input{setting.tex}
+
+% C++ styled text
+\newcommand{\CC}{C\nolinebreak\hspace{-.05em}\raisebox{.4ex}{\tiny\bf +}%
+\nolinebreak\hspace{-.10em}\raisebox{.4ex}{\tiny\bf +}}
+
+\title{A Short Overview of Go}
+\author{Yiteng Zhang}
+
+\begin{document}
+\maketitle
+
+\indent{}因为一些工程上的原因，最近对Go语言产生了一些兴趣。本篇文章基本上摘录和翻译自维基百科上的Go编程语言条目，
+通过一些阅读来快速取得对Go语言的概览，并简单了解其设计思想。
+
+\begin{figure}[h]
+\centering
+\includegraphics[width=5cm]{./imgs/512px-Go_Logo_Blue.svg.png}
+\end{figure}
+
+\indent{}Go语言是由 Google 主导设计的一门静态类型的编译语言，设计者为 Robert Griesemer, Rob Pike 和 Ken Thompson。
+Go在语法上与C语言十分接近，但其额外考虑了内存安全、垃圾回收、结构化类型以及CSP风格的并发。Go语言也经常被称为
+Golang，因为语言的官网域名是\texttt{golang.org}，但这门编程语言的确切名称是Go。Go语言主要有两个实现：
+
+\begin{itemize}
+    \item Google的自举编译工具链。针对多种操作系统，移动设备与WebAssembly
+    \item gccgo，一个GCC前端
+\end{itemize}
+
+\noindent{}第三方的源到源编译器（transpiler）GopherJS，可以将Go编译到JavaScript，用于Web前端开发。
+
+\indent{}Go语言于2007年由Google主导设计，旨在提高目前的多核，多机网络与大型代码库时代的编程效率。
+设计者主要针对一些对于在Google使用的其他编程语言的意见，并保留了一些有用的特性：
+\begin{itemize}
+    \item 静态类型与运行时效率（\CC）
+    \item 可读性与易用性（Python或JavaScript）
+    \item 高性能网络与多处理器
+\end{itemize}
+
+\indent{}Go于2009年11月公布，并于2012年3月发布了其1.0版本。目前是1.15版本。这些年来，Go语言已经在Google与许多
+组织或开源项目中被广泛使用。目前的Go 1.x版本中，用户主要不满于其缺少对于错误处理的良好支持，过于冗长。并且，目前Go不
+支持泛型。有关这两项问题已在2018年8月被加入设计草案，并有望在将来的版本中被解决。
+
+\indent{}在语言的设计上，Go语言主要受C语言影响，但更注重于编程的简单性与语言的安全性。Go语言主要包含的一些特性
+有：
+\begin{itemize}
+    \item 采用在动态语言中更常见的语法与环境：
+        \begin{itemize}
+            \item 可选的简洁的变量声明与初始化（通过类型推导实现）
+            \item 快速编译
+            \item 软件包管理与在线软件包文档
+        \end{itemize}
+    \item 解决特定问题的特殊方法：
+        \begin{itemize}
+            \item 内置的并发原语：goroutine，channels 与 select语句
+            \item 用于替代虚继承的接口系统 (interface system)，使用类型嵌入而非继承
+            \item 默认情况下产生原生二进制静态链接的工具链，无外部依赖
+        \end{itemize}
+    \item 希望保持语言语法规则的至简性
+\end{itemize}
+
+\indent{}在语法上，Go包括一些对C语言语法的更改，以保持代码的简洁与可读性。其引入了组合的声明/初始化运算符，
+使得程序员可以写出\texttt{i := 3}或\texttt{s := "Hello World!"}，而不必显式地指定变量的类型。分号仍然会终止语句，
+但在行尾是隐式存在的。一个Go方法可以返回多个值，并以返回\texttt{(result, err)}对作为对错误指示的常规表示。
+除此之外，Go还添加了\texttt{for-range}循环，可方便地对切片、key-value映射、信道（channel）等进行迭代。
+
+\indent{}Go的内置类型包括数值类型（\texttt{bytes}，\texttt{int64}，\texttt{float32}等），布尔类型（\texttt{bool}）与字符串
+类型（\texttt{string}）。字符串是不可变的，内置的运算符和关键字提供了连接，比较和UTF-8的编解码。记录类型
+可以通过使用\texttt{struct}关键字来定义。
+
+\indent{}对于每个类型$T$与每个非负整数常量$n$，存在表示为$[n]T$的数组类型，因而不同长度的数组具有不同的类型。动态数组
+以“切片”形式存在，对于一些类型$T$，被记为$[]T$。切片具有长度和容量，用于指定何时需要分配新的内存来扩展数组。
+几个切片可以共享底层的内存空间。
+
+\indent{}对于所有的类型$T$，都有指向对应类型的指针，记为$*T$。可以像在C语言里那样使用取地址运算符\texttt{\&}与
+解引用运算符\texttt{*}。引用与解引用还可以通过方法调用或字段访问隐式地发生。除了通过使用标准库中特殊
+的\texttt{unsafe.Pointer}以外，指针不能进行算术运算。
+
+\indent{}对于一对儿类型$K$与$V$，类型$\mathrm{map}[K]V$是将类型$K$表示的关键字映射到类型$V$表示的值的哈希表类型。
+哈希表被内置于语言中，具有特殊的语法与内置函数。另外，作为Go并发的重要部分，类型$\textrm{chan }T$是一个可以允许
+在两个Go并发过程之间传送数据的通道，即信道（channels）。
+
+\indent{}若不含对接口的支持，Go的类型系统是名义（nominal）类型系统：关键字\texttt{type}可被用于定义新的命名类型
+（即可以区分于其他命名类型，但具有相同布局）。类型之间的一些转换是预定义的（例如对于各种整型类型之间的转换）。
+添加新的类型可能会定义额外的转换，但是在命名类型之间的转换必须被显式调用。比如，可以通过使用\texttt{type}
+关键字，基于32位无符号整型来定义IPv4地址类型：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Go}
+    type ipv4addr uint32
+\end{minted}
+\noindent{}在这种定义下，使用\texttt{ipv4addr(x)}会将\texttt{uint32}类型的值\texttt{x}解释为IP地址。简单地将
+\texttt{x}赋值给\texttt{ipv4addr}类型的变量会导致类型错误。
+
+\indent{}Go常量表达式可以是类型化的，也可以是“非类型化”的。当它们被赋值给一个某类型的变量且它们表示的值通过编译期
+检查时，它们会被赋予类型。
+
+\indent{}函数类型由关键字\texttt{func}表示，它们取零个或多个参数，返回零个或多个值。函数的参数和返回值决定了一个
+函数的类型。因而，\texttt{func(string, int32) (int, error)}是一个以一个\texttt{string}与一个32位带符号整型为参数，
+返回一个（默认长的）整型值与一个内建接口类型\texttt{error}值的函数类型。
+
+\indent{}任何命名类型都有一个与之关联的方法集合。以我们的IP地址类型为例，我们可以为其增添一个方法，用来检查IPv4地址
+是否是受限广播地址：
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Go}
+    // ZeroBroadcast reports whether addr is 255.255.255.255.
+    func (addr ipv4addr) ZeroBroadcast() bool {
+        return addr == 0xFFFFFFFF
+    }
+\end{minted}
+由于名义类型，该方法的定义会给\texttt{ipv4addr}增添一个方法，但不会给\texttt{uint32}增添方法。
+
+\indent{}Go语言还提供了两个特性用于取代类的继承。第一个特性是类型嵌入（embedding），可以被看做是组合（composition）
+或委托（delegation）的一种自动形式。第二个特性是接口（interface）系统，它提供了运行期多态（runtime polymorphism）。
+接口是类型类（class of types），其在Go的名义类型系统中提供了结构化类型的有限形式。具有接口类型的对象也具有另一种
+类型，这有些像{\CC}中一个对象可以同时属于基类与派生类。Go的接口是根据Smalltalk语言的协议（protocol）设计的。
+在描述Go的接口时，很多资料用了“鸭子类型”这一术语。由于鸭子类型并不是这里的精确定义，所以也说不上错。不过，这样的描述
+暗含了类型一致性并未被静态检查。与这种描述不同，Go编译器会静态检查接口的一致性（执行类型断言时除外），因此Go的
+作者更喜欢使用“结构化类型”一词。
+
+\indent{}一个接口类型的定义按名称与类型列出了所需的方法。一个类型为$T$的任意对象，如果其支持的方法能够与接口类型$I$所需
+的所有的方法匹配，我们说实现了接口$I$，这个对象也是类型$I$的对象。与此同时，类型$T$的定义并不需要（也不能）与类型$I$
+一致。我们以一些几何组件举个例子，如果类型\texttt{Shape}，\texttt{Square}与\texttt{Circle}被定义为：
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Go}
+import "math"
+
+type Shape interface {
+    Area() float64
+}
+
+type Square struct { // Note: no "implements" declaration
+    side float64
+}
+
+func (sq Square) Area() float64 { return sq.side * sq.side }
+
+type Circle struct { // No "implements" declaration here either
+    radius float64
+}
+
+func (c Circle) Area() float64 { return math.Pi * math.Pow(c.radius, 2) }
+\end{minted}
+如上定义，一个\texttt{Square}与一个\texttt{Circle}都隐式的是一个\texttt{Shape}，它们可以被赋值给一个\texttt{Shape}类型
+的变量。在形式化语言中，Go的接口系统提供了结构化类型而不是名义类型。接口可以被嵌入在其他接口中，以创建一个组合接口。
+对于这个组合接口的实现，可以通过完全实现被嵌入的接口的类型与实现新添加的那些方法所满足。
+
+\indent{}除了通过接口来调用方法，Go允许通过运行时类型检查将接口值转换为其他类型。空接口\texttt{interface\{\}}是一个重要的
+基本情形，因为它可以代指任何确切具体的类型，包括内建的基本类型。这有点像Java或C\#的\texttt{Object}类。使用空接口的
+代码不能简单地在引用对象上调方法，但可以存储接口值，并可以用类型转换或者类型断言将其转化为更有用的类型。因为接口可以
+代指任何类型的值，这是摆脱静态类型束缚的一种有限的方式，有点像C语言中的\texttt{void*}，但附带有运行时类型检查。
+
+\indent{}Go语言具有在语言层面上对并发编程的支持，还有一些有用的库。Go语言的主要并发构件是goroutine。将\texttt{go}关键字
+放在一个函数调用之前，就可以在一个新的goroutine中启动一个函数。语言规范并未明确指定应如何实现goroutine，但现在的实现将
+Go进程的goroutine多路复用到操作系统线程的一组较小集合上，有点像Erlang中的调度。
+
+\indent{}尽管Go提供了具有大多数经典并发控制结构（如互斥锁）的标准库包（Package），用Go做并发编程时更倾向于使用信道（Channels）。
+几个goroutine之间可以通过信道来通信。另外，还提供了带缓冲区的信道，它以FIFO的顺序存消息。
+
+\indent{}信道是带类型的，因此一个类型为$\textrm{chan }T$的信道只能够用来传送类型为$T$的数据。可以使用一种特殊
+的语法对信道进行操作。\texttt{<-ch}是一个表达式，它使正在执行的goroutine阻塞，直到有一个值被放在信道\texttt{ch}上为止。
+可以使用\texttt{ch <- x}将一个值\texttt{x}送上信道，这个操作也可能会被阻塞（在某个goroutine将信道上的值取出之前）。
+Go内建的\texttt{select}语句可以使一个goroutine等待在多个通信操作上，直到其中有一个做好准备。另外，\texttt{select}还可以
+带上\texttt{default}选择支，用于在多个信道上做非阻塞通信。下面给出\textit{A Tour of Go} 中的两个例子来说明\texttt{select}的用法：
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Go}
+// The first example of select: producer-consumer
+package main
+
+import "fmt"
+
+func fibonacci(c, quit chan int) {
+    x, y := 0, 1
+    for {
+        select {
+            case c <- x:
+                x, y = y, x+y
+            case <-quit:
+                fmt.Println("quit")
+                return
+        }
+    }
+}
+
+func main() {
+    c := make(chan int)
+    quit := make(chan int)
+    go func() {
+        for i := 0; i < 10; i++ {
+            fmt.Println(<-c)
+        }
+        quit <- 0
+    }()
+    fibonacci(c, quit)
+}
+\end{minted}
+
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Go}
+// The second example of select: non-blocking
+package main
+
+import (
+    "fmt"
+    "time"
+)
+
+func main() {
+    tick := time.Tick(100 * time.Millisecond)
+    boom := time.After(500 * time.Millisecond)
+    for {
+        select {
+            case <-tick:
+                fmt.Println("tick.")
+            case <-boom:
+                fmt.Println("BOOM!")
+                return
+            default:
+                fmt.Println("    .")
+                time.Sleep(50 * time.Millisecond)
+        }
+    }
+}
+\end{minted}
+
+\indent{}通过使用这些工具，我们可以构建出工作者池（worker pools）、管道（pipelines）、带有超时的后台调用等。除了
+通常的进程间通信的概念外，信道被发现还有更多用途，比如用作并发安全的循环缓冲（recycled buffer）列表，用于实现协程（coroutine），
+用于实现迭代器等。
+
+\indent{}Go对于goroutine如何访问共享数据没有做限制，这可能会导致竞争条件（race condition）。具体来讲，除非显式地使用
+同步措施，比如使用信道或其他同步方法，一个goroutine的写操作对于另一个goroutine可能会是部分或完全不可见的，也不能够保证写入顺序。
+此外，Go内建的数据结构，比如接口值，切片标头，哈希表和字符串标头，无法避免竞争条件。因此，在多线程程序中修改这些类型
+的共享实例却不加以同步的话，是没有安全保障的。安全的并发程序并不靠语言本身提供支持，而是依靠约定。例如，Chisnall建议使用一种
+被称为“别名异或可变”（aliases xor mutable）的惯用法，意思是通过信道传递一个可变的值（比如指针）会向其接受者传递对值的所有权转移。
+
+\indent{}我们已经从上面的有关\texttt{select}的例子中看到信道对goroutine间通信的作用。但一些情况下我们要做的并不是通信，而是
+想对可能被几个goroutine共享的资源的使用进行限制，以避免冲突。针对这种情况，Go的标准库也提供了一些基本的同步设施，比如用来做
+互斥的\texttt{sync.Mutex}。
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\small,
+               bgcolor=bg,
+               framesep=2mm]{Go}
+package main
+
+import (
+    "fmt"
+    "sync"
+    "time"
+)
+
+// SafeCounter is safe to use concurrently.
+type SafeCounter struct {
+    v   map[string]int
+    mux sync.Mutex
+}
+
+func (c *SafeCounter) Inc(key string) {
+    c.mux.Lock()
+    c.v[key]++
+    c.mux.Unlock()
+}
+
+// Value returns the current value of the counter for the given key.
+func (c *SafeCounter) Value(key string) int {
+    c.mux.Lock()
+    // We can also use defer to ensure the mutex will be unlocked
+    defer c.mux.Unlock()
+    return c.v[key]
+}
+
+func main() {
+    c := SafeCounter{v: make(map[string]int)}
+    for i := 0; i < 100; i++ {
+        // the counter c is shared by goroutines
+        go c.Inc("somekey")
+    }
+    time.Sleep(time.Second)
+    fmt.Println(c.Value("somekey"))
+}
+\end{minted}
+\end{document}

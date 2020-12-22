@@ -1,0 +1,548 @@
+\section{理解Monads}
+\noindent{\textbf{什么是monad？}}Monad是一种根据值和使用这些值的计算序列来构造计算的一种方式。Monads能够让
+我们使用顺序化组件来建立计算，而组件本身也可以是计算序列。Monad决定了如何将几个计算结合起来以形成一个新的
+计算，这使得我们不必在每次需要它时都手写组合代码。
+
+\indent{}将一个monad想作一种用于把一些计算组合成一个复杂计算的策略是很有帮助的。例如，对于我们所熟知的Haskell中
+的\texttt{Maybe}类型：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+data  Maybe a  =  Nothing | Just a
+\end{minted}
+它表示的是可能会失败从而无法返回结果的计算类型。\texttt{Maybe}类型给出了一种用于组合返回\texttt{Maybe}值的计算的策略：
+如果组合后的计算包含一个计算\texttt{B}，这个计算\texttt{B}又依赖于另一个计算\texttt{A}的结果，那么无论是\texttt{A}还
+是\texttt{B}给出了\texttt{Nothing}，组合后的计算都会给出\texttt{Nothing}。如果两个计算\texttt{A}和\texttt{B}都是成功的，
+那么组合后的计算给出的结果会是\texttt{B}应用在\texttt{A}的结果上产生的结果。
+
+\indent{}还有很多不同种类的monad，它们用于不同的计算组合策略。其中，一些常见而又特别有用的monads被包含进了Haskell 2010标准
+库中。我们会在第二节详细介绍他们。
+~\\
+
+\noindent{\textbf{为什么应该尽量去理解monads？}}现在网络上有大量不同的monad教程，这充分说明了很多人对于理解这个概念是
+有困难的。之所以会有困难，是因为monad本身的抽象性，以及它们被用作多种不同的用途，这可能会让人对monad的具体概念感到迷惑。
+
+\indent{}在Haskell中，monad是I/O系统的关键。要在Haskell做I/O，并不一定非要去理解monad才行，但是对I/O monad的理解会改善你
+的代码，并扩充你的能力。对于编程者来说，monads是构造函数式程序的有用工具，它们的有用性体现在三个性质上：
+\begin{itemize}
+\item 模块性（Modularity）：它们允许计算由一些更加简单的计算合并而成，并将合并策略与实际正在进行的计算分离开。
+\item 灵活性（Flexibility）：比起不使用monads，它们能让函数式程序的适用性更强。这是因为monad将计算策略抽取并独立放置，而非
+让它分布在整个程序中。
+\item 隔离性（Isolation）：他们可以用来创建命令式（ imperative-style）的计算结构，这些结构可以安全地与函数式程序的主体隔离。
+这有助于将副作用（比如I/O）与状态（会打破引用透明性）并入像Haskell这样的纯函数式语言中。
+\end{itemize}
+\noindent{}在后续部分中，我们会结合具体的monad对以上每一个特性进行讨论。
+
+\subsection{认识Monads}
+\subsubsection{类型构造器（Type constructors）}
+为了理解Haskell中的monads，需要先熟悉类型构造器。类型构造器是一个参数化的类型定义，用于多态类型。通过向一个
+类型构造器提供一个或多个具体的类型（作为其参数），我们可以创建一个新的具体的类型。例如，在\texttt{Maybe}的定义中，
+\texttt{Maybe}即是一个类型构造器，而\texttt{Nothing}与\texttt{Just}是数据构造器（data constructors）。我们可以
+通过将数据构造器应用到值上来创建一个数据值（data value）。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+country  =  Just "China"
+\end{minted}
+\noindent{}作为一个例子，上面这行代码中，我们将数据构造器\texttt{Just}应用到字符串值\texttt{"China"}上，构建了
+一个data value \texttt{country}。类似地，我们可以将类型构造器应用到类型上来构建新的类型：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+lookupAge :: DB -> String -> Maybe Int
+\end{minted}
+\indent{}多态类型就像一个容器，可以容纳许多不同类型的值。所以\texttt{Maybe Int}可以被看作是容纳\texttt{Int}类型的值
+的\texttt{Maybe}容器，而\texttt{Maybe String}可被看作是容纳\texttt{String}类型值的\texttt{Maybe}容器。在Haskell中，我们
+还能让容器的类型也是多态的，所以我们可以写出\texttt{m a}来表示一个具有某种类型\texttt{m}的，
+且容纳某种类型\texttt{a}的值的容器。
+
+\indent{}我们经常协同使用类型构造器与类型变量（type variable）来描述一个计算的抽象特征。比如，多态类型\texttt{Maybe a}是
+所有可能返回一个值或\texttt{Nothing}的计算的类型。利用这种方式，我们就能够脱离容器所容物的细节来讨论容器的属性。
+
+\subsubsection{Maybe a monad}
+在Haskell中，一个monad被表示为一个类型构造器（我们称其为\texttt{m}），一个用于构建具有那种类型的值
+的函数（称为\texttt{a -> m a}），以及一个将该类型的值与产生该类型值的计算相结合以产生一个
+新的计算（这个计算也产生该类型的值）的函数（称为\texttt{m a -> (a -> m b) -> m b}）。要注意的是，容器是相同的，
+但容器所容纳内容的类型是可以变的。习惯上，在讨论monad时，我们称monad类型构造器为\texttt{m}。用于构建具有那种类型的值的
+函数被称为\texttt{return}。剩下的那个函数被称为bind，但通常写作\texttt{>>=}（它用作中缀函数）。这些函数的签名如下所示：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+-- the type of monad m
+data  m a  =  ...
+
+-- return takes a value and embeds it in the monad
+return :: a -> m a
+
+-- bind is a function that combines a monad instance m a with a computation
+-- that produces another monad instance m b from a's to produce a new monad instance m b
+(>>=) :: m a -> (a -> m b) -> m b
+\end{minted}
+\indent{}粗略地讲，monad类型构造器定义了一个计算的类型，函数\texttt{return}创建那个计算类型的基元值（primitive values），
+而\texttt{>>=}将那种类型的计算合并在一起来创建一个相同类型的更为复杂的计算。用容器类比的话，类型构造器\texttt{m}是
+一个容纳不同值的容器。\texttt{m a}是一个容纳类型为\texttt{a}的值的容器。\texttt{return}将一个值推入一个monad容器。
+\texttt{>>=}从一个monad容器中取出值，并将其送入一个用于产生一个包含新值的monad容器中（新值的类型与之前取出的值的类型可以不一样）。
+\texttt{>>=}被称为bind，因为它将一个monad中的值绑定到一个函数的第一个参数上。通过赋予bind函数具体的逻辑，一个monad可以为
+计算的组合实现特定的策略。
+
+\subsubsection{一个例子}
+\indent{}我们用一个例子来展示一下上一小节所阐述的概念。假设我们正在编写一个程序来跟踪克隆羊实验。
+我们当然想知道所有羊的遗传史，所以我们需要母羊和父羊函数。
+但由于这些羊是克隆羊，它们不一定总有母羊和父羊!我们可以用\texttt{Maybe}来表示可能没有父/母羊的可能性：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+type  Sheep  =  ...
+
+father :: Sheep -> Maybe Sheep
+father = ...
+
+mother :: Sheep -> Maybe Sheep
+mother = ...
+\end{minted}
+\noindent{}之后，定义函数来找到祖辈的羊。这可能会有点复杂，因为可以没有父羊或母羊：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+maternalGrandfather    :: Sheep -> Maybe Sheep
+maternalGrandfather s  =  case (mother s) of
+                            Nothing -> Nothing
+                            Just m  -> father m
+\end{minted}
+\noindent{}其它的寻找祖辈的函数可以用类似的方式定义。我们还能进一步写出寻找曾祖辈羊的函数：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+mothersPaternalGrandfather    :: Sheep -> Maybe Sheep
+mothersPaternalGrandfather s  =  case (mother s) of
+                                   Nothing -> Nothing
+                                   Just m  -> case (father m) of
+                                                Nothing -> Nothing
+                                                Just gf -> father gf
+\end{minted}
+
+\indent{}除了丑陋、不清晰、难以维护外，这些实现还非常地费功夫。很明显，在计算的任何
+一点上的\texttt{Nothing}值都会导致最后返回\texttt{Nothing}。如果能把这一概念单另实现，
+并去掉散落在代码中的所有显式的\texttt{case}测试，就会好很多。这将使代码更容易编写，更容易阅读，也更易于修改。
+所以好的编程风格会让我们创建一个组合器来捕获我们想要的行为：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+-- comb is a combinator for sequencing operations that return Maybe
+comb             :: Maybe a -> (a -> Maybe b) -> Maybe b
+comb Nothing  _  =  Nothing
+comb (Just x) f  =  f x
+
+-- now we can use `comb` to build complicated sequences
+mothersPaternalGrandfather    :: Sheep -> Maybe Sheep
+mothersPaternalGrandfather s  =  (Just s) `comb` mother `comb` father `comb` father
+\end{minted}
+\noindent{}组合器功效显著！上面的代码清晰简洁，易于理解与修改。注意\texttt{comb}函数是完全多态的，它并不
+是专为\texttt{Sheep}所用的。实际上，组合器捕获到了“用于合并可能无法返回值的计算的一般策略”。因此，我们可以
+将这个组合器应用到其它可能无法返回值的计算中，比如数据库查询或字典查找。
+
+\indent{}不知不觉中，我们已经得到了一个monad。\texttt{Maybe}类型构造器与\texttt{Just}函数（起\texttt{return}的作用）和
+我们的组合器（起\texttt{>>=}的作用）一起构成了一个简单的monad，这个monad用于构建可能不返回值的计算。在下一章中，我们
+使其符合Haskell的monad框架以让它变得真正有用。
+
+\subsubsection{列表（list）也是monad}
+\indent{}我们已经看到，\texttt{Maybe}类型构造器是用于构建可能不返回值的计算的monad。你可能会惊讶于另一个
+简单的Haskell类型构造器\texttt{[]}（用于构建列表），也是一个monad。所谓的list monad允许我们构建可以返回
+零个，一个或多个值的计算。
+
+\indent{}用于列表的\texttt{return}函数简单地创建一个单例（singleton）列表：\texttt{return x = [x]}。用于
+列表的binding操作会创建一个新的列表，这个列表包含的是将函数应用到原列表的元素上所产生的结果。其定义为：
+\texttt{l >>= f = concatMap f l}。
+
+\indent{}返回列表的函数的一个用途是用来表示模糊（ambiguous）的计算，也就是可能会产生不确定数量返回值的计算。
+在一个由模糊的子计算结合而成的计算中，其模糊性可能是复合的（compound），或者最终化为唯一允许的结果，或根本没有
+可被接受的结果。在这一过程中，可能的计算状态的集合被表示为一个列表。因此，list monad体现了一种策略，这种策略
+是用于这样一种计算：对于一个模糊的计算，沿着所有允许的路径同时进行计算。
+
+\subsubsection{总结}
+\indent{}如上所述，一个monad是：一个类型构造器，一个\texttt{return}函数，一个被称之为bind或\texttt{>>=}的组合器函数。
+这三者一起作用，封装了一个用于将几个计算合并从而产生一个更为复杂的计算的策略。
+
+\indent{}通过使用\texttt{Maybe}类型构造器，我们看到了良好的编程实践是如何引导我们去定义一个简单的monad的：该monad可
+被用来从一个计算的序列中构建一个复杂的计算，这个计算序列中的每一个计算都是可能无法返回值的计算。由此产生的\texttt{Maybe}
+monad封装了用于合并可能不返会值的计算的策略。通过将这种策略编入一个monad，我们获得了一定程度的模块性和灵活性。
+\clearpage
+
+\subsection{Doing it with class}
+这一节的讨论会涉及到Haskell的类型类（type class）系统，因而在继续阅读之前可以先对
+它进行回顾（注意区分type、class与typeclass的概念，typeclass亦是一种类，用\texttt{class}关键字来定义）。
+
+\subsubsection{The Monad class}\label{subsec:minimal_definition}
+\indent{}在Haskell中，有一个标准的\texttt{Monad}类，它定义了\texttt{return}和\texttt{>>=}这两个函数
+的名称与签名。尽管不是非要让你的monads成为这个标准\texttt{Monad}类的实例不可，但这样做确实是个好主意。Haskell为
+\texttt{Monad}实例提供了内建的特殊支持。让你的monads成为\texttt{Monad}的实例可以使你用上这些特性，从而
+写出更为简洁优雅的代码。同时，让你的monads成为\texttt{Monad}类的实例实际上向代码阅读者传递了重要的信息，不这么
+做的话可能会导致你使用带有歧义性或不标准的函数名。
+
+\indent{}这个标准的\texttt{Monad}类看起来像这样：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+class Monad m where
+    (>>=)  :: m a -> (a -> m b) -> m b
+    return :: a -> m a
+\end{minted}
+
+\vspace{-0.7em}
+\subsubsection{Example continued}
+\indent{}让我们继续上一节提到的克隆羊的例子，我们将会看到\texttt{Maybe}类型构造器是如何作为\texttt{Monad}类
+的一个实例融入Haskell的monad框架的。
+
+\indent{}回想一下，我们的\texttt{Maybe} monad使用\texttt{Just}数据构造器来作monad的\texttt{return}函数之用，我们还
+构建了一个简单的组合器来作monad的\texttt{>>=}函数之用。那么我们可以显式地将\texttt{Maybe}声明为\texttt{Monad}类的实例
+使其作monad之用：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+instance Monad Maybe where
+    Nothing  >>= f  =  Nothing
+    (Just x) >>= f  =  f x
+    return          =  Just
+\end{minted}
+\noindent{}一旦我们将\texttt{Maybe}定义为\texttt{Monad}类的一个实例，我们就能用标准的monad操作来构建复杂
+的计算：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+-- we can use monadic operations to build complicated sequences
+maternalGrandfather    :: Sheep -> Maybe Sheep
+maternalGrandfather s  =  (return s) >>= mother >>= father
+
+fathersMaternalGrandmother    :: Sheep -> Maybe Sheep
+fathersMaternalGrandmother s  =  (return s) >>= father >>= mother >>= mother
+\end{minted}
+\indent{}在Haskell标准的\texttt{prelude}中，\texttt{Maybe}是被定义为\texttt{Monad}类的一个实例的，所以你不用自己
+来做这件事。至此我们看到的另一个monad，即列表构造器\texttt{[]}，亦在\texttt{prelude}中被定义为\texttt{Monad}类的
+一个实例。在使用monad写函数时，注意要使用\texttt{Monad}类，而不是使用特定的实例。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+doSomething :: (Monad m) => a -> m b
+\end{minted}
+\noindent{}这样的写法比写成 \mintinline{Haskell}|doSomething :: a -> Maybe b| 更灵活。
+
+\indent{}前一种写法能够用于很多不同的monad类型，以根据对应monad所体现的策略来得到不同的行为。然而，后一种
+写法将策略限制到了\texttt{Maybe} monad的策略，因而缺少了这层灵活性。
+
+\subsubsection{Do notation}
+\indent{}使用标准的monadic函数是很不错的一点，而加入\texttt{Monad}类的另一好处是Haskell对\texttt{do}记法的支持。
+Do记法是一种表达上的简写，这种简写用于方便地构建monadic的计算，就像列表推导式是用于构建列表上的计算的一种简写。
+\texttt{Monad}类的任意一个实例都可以用在Haskell的do block中。
+
+\indent{}简单地讲，do记法使你能够以一种“伪”命令式的风格用命名变量来写monadic的计算。通过使用左箭头\texttt{<-}运算符，
+一个monadic的计算可以被“赋值”给一个变量。之后，将这个变量用于后续的monadic计算中将会自动地进行binding操作。
+在使用do记法时，箭头右侧的表达式的类型是一个monadic类型\texttt{m a}，而箭头左侧的表达式是一个要与monad内部的
+值进行匹配的模式（pattern）。
+
+\indent{}这里有一个将\texttt{Maybe} monad用在do记法中的例子：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+-- we can also use do-notation to build complicated sequences
+mothersPaternalGrandfather    :: Sheep -> Maybe Sheep
+mothersPaternalGrandfather s  =  do m  <- mother s
+                                    gf <- father m
+                                    father gf
+\end{minted}
+\noindent{}这个例子可以与上面的\texttt{fathersMaternalGrandmother}的写法对比着看。
+
+\indent{}注意到do记法有点像一种命令式编程语言。就此而言，monads提供了在一个更大的函数式程序中创建命令式风格的
+计算的可能性。稍后我们会在讨论副作用与I/O monad时扩展这个主题。
+
+\indent{}Do记法只是语法糖罢了，不会有什么是能用do记法做而不能用标准monadic的操作做到的。不过，在一些情形下do记法
+确实更加清晰和方便，特别是当monadic计算的序列非常长的时候。所以我们应该同时掌握标准的monadic的binding记法和
+do记法，并在合适的时候选用它们。
+
+\indent{}从do记法到标准的monadic操作的实际转换过程大致是，对于每个与模式\texttt{x <- expr1}相匹配的表达式，
+都将其变成：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+expr1 >>= \x ->
+\end{minted}
+\noindent{}并且每个没有变量赋值的表达式\texttt{expr2}，变成：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+expr2 >>= \_ ->
+\end{minted}
+\noindent{}所有的do block必须以一个monadic的表达式结尾，而且一个do block的开头是可以用\texttt{let} clause的（但
+用在do block中的\texttt{let} clauses不使用\texttt{in}关键字）。上面的\texttt{mothersPaternalGrandfather}可以从
+do记法的写法被转换为标准的monadic binding的写法：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+mothersPaternalGrandfather s  =  mother s >>= (\m -> father m >>= (\gf -> father gf))
+\end{minted}
+
+\vspace{-0.5em}
+\subsubsection{总结}
+\indent{} Haskell提供了monads的内建支持。为了利用好这种支持，你要将monad类型构造器声明为\texttt{Monad}类的一个实例，
+并提供相应的\texttt{return}与\texttt{>>=}函数的定义。作为\texttt{Monad}类的实例，一个monad可以和do记法一起使用，而do
+记法是提供了一种简单而具有命令式风格的记法的语法糖。
+\clearpage
+
+\subsection{Monad 定律}
+\indent{}到目前为止，本文都避免了技术性讨论，但有几个关于monad的技术点是必须要提及的。Monadic的操作必须
+遵从一组定律，即“monad公理”。Haskell编译器并不对这些定律做强制性要求，因而，是否要保证所声明的
+\texttt{Monad}实例满足这些定律，是取决于程序员的。Haskell的\texttt{Monad}还包含了一些超出
+最小完备定义的函数（目前还未提及）。许多monads遵从标准monad定律之外的附加定律，并且有一个额外的Haskell类
+来支持这些扩展的monads。
+
+\subsubsection{三个基本定律}
+\indent{}Monad的概念来自范畴论这一数学分支。尽管范畴论的知识对于创建和使用monad并不是必须的，我们确实还是要
+遵从一些数学形式。为了创建一个monad，仅仅用正确的类型签名来声明\texttt{Monad}的一个实例是不够的。要使其成为
+正确的monad，\texttt{return}和\texttt{>>=}函数必须满足下述三条定律：
+\begin{enumerate}
+\item 左单位元（left-identity）：\texttt{(return x) >>= f  ==  f x}
+\item 右单位元（right-identity）：\texttt{m >>= return  ==  m}
+\item 结合律（associativity）：\texttt{(m >>= f) >>= g  ==  m >>= (\textbackslash x -> f x >>= g)}
+\end{enumerate}
+如上，\noindent{}第一条定律要求\texttt{return}是关于\texttt{>>=}的左单位元。第二条定律要求\texttt{return}是关于
+\texttt{>>=}的右单位元。第三条定律是\texttt{>>=}的结合律。遵从这三条定律能够保证使用monad的do记法的语义一致性。
+
+\subsubsection{Failure IS an option}
+\indent{}我们在~\ref{subsec:minimal_definition}~中给出的\texttt{Monad}的定义实际上仅是最小完备定义。
+\texttt{Monad}类的完全（full）定义实际上还包含两个额外的函数：\texttt{fail}和\texttt{>>}。
+
+\indent{}\texttt{fail}函数的默认实现是：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+fail s  =  error s
+\end{minted}
+\noindent{}除非你想为failure提供不同的行为，或是将failure融入你的monad策略中，上述实现是不需要被改变的。
+关于这个函数，以\texttt{Maybe}举例来说，其\texttt{fail}定义为：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+fail _  =  Nothing
+\end{minted}
+\noindent{}因而，当与\texttt{Maybe} monad中的其它函数绑定时，\texttt{fail}会返回一个
+具有有意义行为的\texttt{Maybe} 实例。
+
+\indent{}\texttt{fail}函数并不是monad的数学定义所需要的部分，但它仍被包含进了\texttt{Monad}的完全定义中，因为
+它在Haskell的do记法中起到了作用。在do block中，无论何时一个模式匹配（pattern matching）失败发生，\texttt{fail}函数
+就会被调用。下面是这种情形的一个例子：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+fn      :: Int -> Maybe [Int]
+fn idx  =  do let l = [Just [1,2,3], Nothing, Just [], Just [7..20]]
+              (x:xs) <- l!!idx   -- a pattern match failure will call "fail"
+              return xs
+\end{minted}
+\noindent{}在上面的代码中，\texttt{fn 0}会返回\texttt{Just [2,3]}，而\texttt{fn 1}或\texttt{fn 2}都会
+得到\texttt{Nothing}。
+
+\indent{}另一个额外的函数\texttt{>>}是一种方便的操作，它被用于bind一个不需要从（计算序列中）之前的计算拿到
+其输入的monadic计算。它的定义是关于\texttt{>>=}的：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+(>>)    :: m a -> m b -> m b
+m >> k  =  m >>= (\_ -> k)
+\end{minted}
+
+\vspace{-1.2em}
+\subsubsection{No way out}
+\indent{}你可能已经注意到了，在标准的\texttt{Monad}类的定义中，没有对应于从monad中拿到值的方法。实际上，这并不是一个意外。
+没有什么能够阻止monad的作者使用特定于对应monad的函数来做到这一点。例如，对于我们熟知的\texttt{Maybe} monad而言，
+可以通过在\texttt{Just x}上进行模式匹配，或是使用\texttt{fromJust}函数来从中提取值。
+
+\indent{}因为不需要这种函数，Haskell的\texttt{Monad}类允许单向（one-way）monads的创建。单向monads允许值通过
+\texttt{return}函数（有时是\texttt{fail}函数）进入monad，它们允许在monad中进行的计算使用\texttt{>>=}和\texttt{>>}函数，
+但它们不允许值从monad中退回。
+
+\indent{}\texttt{IO} monad就是Haskell中单向monad的一个著名的例子。由于你不能从\texttt{IO} monad中逃出，所以不可能写出
+一个在\texttt{IO} monad中做计算却不在返回值类型中包含\texttt{IO} 类型构造器的函数。这意味着，对于任何返回值类型中不包含
+\texttt{IO}构造器的函数，它肯定不会用到\texttt{IO} monad。对于其它的monads，比如\texttt{List}或\texttt{Maybe}，它们确实允许
+值从其中逃出，因而你可以写出一个在内部使用了这些monad，却返回non-monadic值的函数。单向monad的妙处在于，它可在其monadic操作
+中支持副作用而不使这些副作用破坏程序中non-monadic部分的函数式特性。
+
+\indent{}考虑从用户那里读一个字符这样的简单问题。我们不能简单地去写\texttt{readChar :: Char}这样的函数，因为这种函数每次
+被调用时都需要返回一个不同的字符（取决于用户输入了什么）。Haskell作为纯函数式语言的基本特性是所有的函数在形式上都是pure的，
+即以相同的参数调用一个函数两次（实际上，无论几次），一定会得到相同的结果。但是我们用\texttt{IO} monad写一个
+\texttt{getChar :: IO Char}这样的I/O函数是可以的，因为它只能用于单向monad下的一个序列（sequence）。对于在函数签名中使用
+了\texttt{IO}类型构造器的任何函数，是没有办法甩掉\texttt{IO}类型构造器的。这样一来，\texttt{IO}类型构造器就起到了类似
+标签（tag）一样的作用，识别所有做I/O的函数。并且，这类函数只在\texttt{IO} monad中有用。因而一个单向monad有效地创建了
+一个隔离的计算域，纯函数式语言的规则在这个计算域中可以被放松（relaxed）。函数式的计算可以被移入这个域中，但那些危险
+的副作用和非引用透明（non-referentially-transparent）的函数是不能从域中逃出的。
+
+\vspace{-0.6em}
+\subsubsection{Zero and Plus}
+\indent{}除前文提到的三个基本的monad定律外，一些monads还遵从一些额外的定律。这些monads具有一个特殊的值\texttt{mzero}和一个
+运算符\texttt{mplus}，它们遵从四个额外的定律：
+\begin{enumerate}
+\item \texttt{mzero >>= f  ==  mzero}
+\item \texttt{m >>= (\textbackslash x -> mzero)  ==  mzero}
+\item \texttt{mzero `mplus` m  ==  m}
+\item \texttt{m `mplus` mzero  ==  m}
+\end{enumerate}
+\noindent{}以普通算数运算做类比，如果将\texttt{mzero}看作0，将\texttt{mplus}看作$+$，将\texttt{>>=}看
+作$\times$，这是很好理解的。\clearpage
+
+\noindent{}在Haskell中，具有“零”和“加”的monads可被声明为\texttt{MonadPlus}类的实例，它定义如下：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+class (Monad m) => MonadPlus m where
+    mzero :: m a
+    mplus :: m a -> m a -> m a
+\end{minted}
+\noindent{}仍用\texttt{Maybe} monad作例子，我们看到它是\texttt{MonadPlus}的实例：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+instance MonadPlus Maybe where
+    mzero              =  Nothing
+    Nothing `mplus` x  =  x
+    x `mplus` _        =  x
+\end{minted}
+\noindent{}这会将\texttt{Nothing}识别为零值，而且将两个\texttt{Maybe}值加在一起会给出第一个
+不为零值（即\texttt{Nothing}）的值。如果两个输入值都是零值，那么\texttt{mplus}的结果也是零值。
+
+\indent{}\texttt{mplus}运算符用于将单独（separate）计算的值结合在一起形成一个单一的monadic值。在我们克隆羊例子的
+上下文中，我们可以使用\texttt{Maybe}的\texttt{mplus}来定义一个函数：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+parent s  =  (mother s) `mplus` (father s)
+\end{minted}
+\noindent{}这个函数会返回双亲（若某一方存在的话）。如果没有双亲的任何一方，则会得到\texttt{Nothing}。如果双亲都存在，
+这个函数会返回某一方，取决于\texttt{mplus}在\texttt{Maybe} monad中的具体定义。
+
+\subsubsection{总结}
+\indent{}\texttt{Monad}类的实例应该满足所谓的monad定律，这些定律描述了monads的代数性质。其中有三个基本定律，表明
+\texttt{return}函数同时作为左单位元与右单位元，并且binding运算符是具有结合性的。如果不能满足这些定律，可能会导致
+monad行为不正确，在使用do记法时可能会有微妙的问题。
+
+\indent{}除了\texttt{return}和\texttt{>>=}函数，\texttt{Monad}类还定义了另外一个函数\texttt{fail}。该
+函数从作为monad的技术需求上来讲不是必须的，但它在实践中很有用，且由于do记法之故，它也被包含在\texttt{Monad}类中。
+
+\indent{}一些monads还遵从额外的monad定律。这样的monad具有零元的概念和加法运算符。Haskell为这些monads提供
+了\texttt{MonadPlus}类，它定义了\texttt{mzero}值和\texttt{mplus}运算符。
+
+\indent{}Haskell 2010 standard prelude 包含了\texttt{Monad}类的定义，并提供了一些与monadic数据类型一起使用的辅助函数。
+由于篇幅原因，原文介绍的\texttt{sequence, mapM, (=<<), foldM, filterM, zipWithM, when, unless, liftM, ap}等函数的细节
+这里就不再详细给出了。

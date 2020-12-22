@@ -1,0 +1,987 @@
+\section{标准Monads的一份目录}
+\indent{}这是本文的第二部分。该部分涉及的monads包括标准Haskell的monad与Andy Gill的monad模板库中的一些monad类。Monad模板库
+被包含在Glasgow Haskell Compiler（GHC）的\texttt{Control.Monad}下的库中。除了这里涉及的monads，还有很多出现在Haskell的
+许多其它地方，比如\texttt{Parsec}中。这些内容超出了我们的讨论范围。本章涉及的monads见下表。
+\begin{table}[h]
+\resizebox{\textwidth}{!}{
+\begin{tabular}{|l|l|l|}
+\hline
+\textbf{Monad} & \textbf{计算的类型} & \textbf{\texttt{>>=}的组合策略} \\ \hline\hline
+\texttt{Identity} & N/A，与monad变换器一起使用 & bound function被应用于输入值 \\ \hline
+\texttt{Maybe} & 可能不会返回结果的计算 & \begin{tabular}[c]{@{}l@{}}\texttt{Nothing}输入会
+给出\texttt{Nothing}输出\\ \texttt{Just x}输入将\texttt{x}作为bound function的输入\end{tabular} \\ \hline
+\texttt{Error} & 可能会失败或抛异常的计算 &  binding在不执行bound function的情况下传递失败信息，或将
+成功值作为bound function的输入\\ \hline
+\texttt{[]}（\texttt{List}） & 会返回多个可能值的非确定性计算 & 将bound function映射到输入
+列表上，然后将结果列表连起来以得到一个从所有可能输入产生的所有可能结果构成的列表 \\ \hline
+\texttt{IO} & 执行I/O的计算 & 按binding序的I/O动作的顺序执行 \\ \hline
+\texttt{State} & 维护状态的计算 & bound function被应用到输入值上以产生一个要被应用到输入状态上的状态转移函数 \\ \hline
+\texttt{Reader} & 从共享环境中读的计算 & bound function被应用到使用相同环境的输入值上 \\ \hline
+\texttt{Writer} & 除计算值外还写数据的计算 & 写数据分离于值被维护，bound function被应用于输入
+值，它写的任何东西都会被追加到写入数据流中 \\ \hline
+\texttt{Cont} & 可被中断和重启的计算 & bound function被插入延续链中 \\ \hline
+\end{tabular}}
+\end{table}
+
+\subsection{The Identity monad}
+\begin{itemize}[leftmargin=*,topsep=0pt,itemsep=0pt]
+\item \textbf{计算的类型：}简单的函数应用
+\item \textbf{Binding策略：}bound function被应用于输入值，\texttt{Identity x >>= f == f x}
+\item \textbf{适用于：}将monad变换器应用于Identity monad可衍生monads
+\item \textbf{zero 与 plus：}无
+\item \textbf{样例类型：}\texttt{Identity a}
+\end{itemize}
+
+\subsubsection{动机}
+\indent{}Identity monad是一个不体现任何计算策略的monad，它简单地将bound function应用到其输入上。从计算上来说，
+没有任何理由不直接使用更为简单直接的函数应用，却去用Identity monad。但Identity monad的目的是作为monad变换器相关
+理论的基础。任何应用到Identity monad上的monad变换器都会给出一个对应monad的非变换器（non-transformer）版本。
+
+\subsubsection{定义}
+\vspace{-1em}
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+newtype Identity a  =  Identity { runIdentity :: a }
+
+instance Monad Identity where
+    return a            =  Identity a   -- i.e. return = id
+    (Identity x) >>= f  =  f x          -- i.e. x >>= f = f x
+\end{minted}
+\noindent{}在类型定义中用到了\texttt{runIdentity}标签，因为它遵从一种monad定义的样式，这种样式将monad值
+显式地表示为计算。由于Identity monad不做任何计算，它的定义是trivial的。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+type State s a  =  StateT s Identity a
+\end{minted}
+如上所示，Identity monad的一个典型的用途是从一个monad变换器导出monad。
+\clearpage
+
+\subsection{The Maybe monad}
+\begin{itemize}[leftmargin=*,topsep=0pt,itemsep=0pt]
+\item \textbf{计算的类型：}可能会返回\texttt{Nothing}的计算
+\item \textbf{Binding策略：}\texttt{Nothing}值会绕过bound function，而其它值会作为bound function的输入
+\item \textbf{适用于：}从一列可能会返回\texttt{Nothing}的函数建立计算，比如一系列字典查找请求
+\item \textbf{zero 与 plus：}\texttt{Nothing}是zero；若两个输入不都是\texttt{Nothing}，则plus给出第一个非\texttt{Nothing}值
+\item \textbf{样例类型：}\texttt{Maybe a}
+\end{itemize}
+
+\subsubsection{动机}
+\indent{}Maybe monad体现了这样一种策略，它将一连串的计算组合起来，这些计算的每一个都可能会给出\texttt{Nothing}，若
+其中任何一步给出了\texttt{Nothing}，则提前结束并以\texttt{Nothing}返回。当计算需要一连串相互依赖的步骤，且步骤可能
+无法返回值时，这是特别有用的。
+
+\vspace{-0.5em}
+\subsubsection{定义}
+\vspace{-1em}
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+data  Maybe a  =  Nothing | Just a
+
+instance Monad Maybe where
+    return          =  Just
+    fail            =  Nothing
+    Nothing  >>= f  =  Nothing
+    (Just x) >>= f  =  f x
+
+instance MonadPlus Maybe where
+    mzero              =  Nothing
+    Nothing `mplus` x  =  x
+    x `mplus` _        =  x
+\end{minted}
+
+\vspace{-0.5em}
+\subsubsection{例子}
+\indent{}一般性的例子是结合字典查询。给定一个将完整名字映射到邮箱地址的字典，和一个将昵称映射到邮箱地址的字典，
+再给出一个将邮箱地址映射到邮箱首选项的字典，那么可以创建一个根据全名或昵称来寻找对应用户邮箱首选项的函数：
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+data MailPref = HTML | Plain
+data MailSystem = ...
+
+getMailPrefs :: MailSystem -> String -> Maybe MailPref
+getMailPrefs sys name =
+  do let nameDB = fullNameDB sys
+         nickDB = nickNameDB sys
+         prefDB = prefsDB sys
+  addr <- (lookup name nameDB) `mplus` (lookup name nickDB)
+  lookup addr prefDB
+\end{minted}
+\clearpage
+
+\subsection{The Error monad}
+\begin{itemize}[leftmargin=*,topsep=0pt,itemsep=0pt]
+\item \textbf{计算的类型：}可能会失败或抛异常的计算
+\item \textbf{Binding策略：}失败会记录其原因或位置，失败值会绕过bound function，而其它值会作为其输入
+\item \textbf{适用于：}从可能失败的函数序列中构建计算，或者使用异常处理来构建错误处理
+\item \textbf{zero 与 plus：}zero由空错误表示；如果第一个参数失败，plus会执行其第二个参数
+\item \textbf{样例类型：}\texttt{Either String a}
+\end{itemize}
+
+\subsubsection{动机}
+\indent{}Error monad（也叫Exception monad）体现了这样一种策略，它通过绕过从异常抛出点到异常处理点的bound function来
+组合可能会抛异常的计算。
+
+\indent{}\texttt{MonadError}类在错误信息类型与monad类型构造器上参数化。对于以字符串形式作为错误描述的error monad，通常
+使用\texttt{Either String}作monad类型构造器。在这种情况（还有许多通常情况）下，得到的monad已经被定义
+为\texttt{MonadError}类的实例了。你也可以定义自己的错误类型或是使用除\texttt{Either String}与\texttt{Either IOError}
+外的monad类型构造器。在这些情况下，你就必须要显式地去定义\texttt{Error}及\texttt{MonadError}类的实例了。
+
+\subsubsection{定义}
+\indent{}\texttt{MonadError}类的定义如下。它使用了多参数类型类和funDeps（它们都是超出了Haskell 2010的
+语言扩展），但无需了解它们即可使用\texttt{MonadError}。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+class Error a where
+    noMsg  :: a
+    strMsg :: String -> a
+
+class (Monad m) => MonadError e m | m -> e where
+    throwError :: e -> m a
+    catchError :: m a -> (e -> m a) -> m a
+\end{minted}
+\noindent{}\texttt{throwError}在一个monadic的计算中使用，以开始异常处理。\texttt{catchError}提供了
+用来解决之前的错误的handler函数，并返回到常规执行中。一个常见的用法是：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+do { action1; action2; action3 } `catchError` handler
+\end{minted}
+\noindent{}这些\texttt{action}函数会调用\texttt{throwError}。注意\texttt{handler}和do block必须有相同的返回类型。
+
+\indent{}将\texttt{Either a}类型构造器定义为\texttt{MonadError}的实例是很直接的。遵循惯例，\texttt{Left}用于错误值，
+而\texttt{Right}用于非错误（non-error）值。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+instance MonadError (Either e) where
+    throwError                     =  Left
+    (Left e) `catchError` handler  =  handler e
+    a        `catchError` _        =  a
+\end{minted}
+
+\subsubsection{例子}
+\indent{}接下来我们看一个例子。这个例子演示了如何将自定义的\texttt{Error}数据类型与\texttt{ErrorMonad}的
+\texttt{throwError}与\texttt{catchError}异常处理机制一起使用。这个例子尝试解析十六进制数，如果遇到了非法字符
+会抛异常。我们使用自定义的\texttt{Error}数据类型来记录解析错误发生的位置。异常被一个函数调用捕获，并通过打印
+错误信息的方式来处理。
+\vspace{-0.8em}
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+-- This is the type of our parse error representation.
+data ParseError = Err {location::Int, reason::String}
+
+-- We make it an instance of the Error class
+instance Error ParseError where
+  noMsg    = Err 0 "Parse Error"
+  strMsg s = Err 0 s
+
+-- For our monad type constructor, we use Either ParseError
+-- which represents failure using Left ParseError or a
+-- successful result of type a using Right a.
+type ParseMonad = Either ParseError
+
+-- parseHexDigit attempts to convert a single hex digit into
+-- an Integer in the ParseMonad monad and throws an error on an invalid character
+parseHexDigit :: Char -> Int -> ParseMonad Integer
+parseHexDigit c idx = if isHexDigit c then
+                        return (toInteger (digitToInt c))
+                      else
+                        throwError (Err idx ("Invalid character '" ++ [c] ++ "'"))
+
+-- parseHex parses a string containing a hexadecimal number into
+-- an Integer in the ParseMonad monad.  A parse error from parseHexDigit
+-- will cause an exceptional return from parseHex.
+parseHex :: String -> ParseMonad Integer
+parseHex s = parseHex' s 0 1
+  where parseHex' []      val _   = return val
+        parseHex' (c:cs)  val idx = do d <- parseHexDigit c idx
+                                       parseHex' cs ((val * 16) + d) (idx + 1)
+
+-- toString converts an Integer into a String in the ParseMonad monad
+toString :: Integer -> ParseMonad String
+toString n = return $ show n
+
+-- convert takes a String containing a hexadecimal representation of
+-- a number to a String containing a decimal representation of that
+-- number.  A parse error on the input String will generate a
+-- descriptive error message as the output String.
+convert :: String -> String
+convert s = let (Right str) = do {n <- parseHex s; toString n} `catchError` printError
+            in str
+  where printError e = return $ "At index " ++ (show (location e)) ++ ":" ++ (reason e)
+\end{minted}
+\clearpage
+
+\subsection{The List monad}
+\begin{itemize}[leftmargin=*,topsep=0pt,itemsep=0pt]
+\item \textbf{计算的类型：}可能会返回零个、一个或多个可能结果的计算
+\item \textbf{Binding策略：}bound function被应用于输入list的所有可能值上，并连接list结果以产生返回list
+\item \textbf{适用于：}从非确定性运算的序列构建计算，比如解析非确定语法
+\item \textbf{zero 与 plus：}\texttt{[]}是zero；\texttt{++}是plus操作
+\item \textbf{样例类型：}\texttt{[a]}
+\end{itemize}
+
+\vspace{-0.5em}
+\subsubsection{动机}
+\vspace{-0.5em}
+\indent{}List monad体现了这样一种策略，它通过将操作应用到每一步的所有可能的值上来组合一连串的非确定性计算。
+这种情况下，它会在所有的模糊之处被消除前探索所有的可能性。
+
+\vspace{-0.5em}
+\subsubsection{定义}
+\vspace{-1.5em}
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+instance Monad [] where
+    m >>= f   =  concatMap f m
+    return x  =  [x]
+    fail s    =  []
+
+instance MonadPlus [] where
+    mzero  =  []
+    mplus  =  (++)
+\end{minted}
+
+\vspace{-1em}
+\subsubsection{例子}
+\indent{}这里我们以一个简单的情景问题作为例子，更复杂的例子可参见原文。假设我们想找出扑克牌的所有可能的模式，
+我们知道一副扑克牌的数字是从1（Ace）到13（King），并且每张牌可能的装饰有梅花、钻石、心形和桃形。如果不考虑
+颜色，这些模式可以由这样的方式给出：
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+-- 4 categories of suit
+data Suit  =  Club | Diamond | Heart | Spade deriving (Show, Enum)
+
+-- rank range in 1 ~ 13
+data Rank  =  Rank Int
+
+-- names of rank
+instance Show Rank where
+    show (Rank 1)  = "Ace"
+    show (Rank 11) = "Jack"
+    show (Rank 12) = "Queen"
+    show (Rank 13) = "King"
+    show (Rank i)  = show i
+
+-- cards in a deck
+deck = [(Rank r, s) | s <- [Club .. Spade]
+                    , r <- [1..13]]
+\end{minted}
+\clearpage
+
+\subsection{The IO monad}
+\begin{itemize}[leftmargin=*,topsep=0pt,itemsep=0pt]
+\item \textbf{计算的类型：}执行I/O的计算
+\item \textbf{Binding策略：}I/O动作以其被绑定的顺序执行，若失败会抛I/O错误，错误可被捕获和处理
+\item \textbf{适用于：}在Haskell程序中做I/O
+\item \textbf{zero 与 plus：}无
+\item \textbf{样例类型：}\texttt{IO a}
+\end{itemize}
+
+\vspace{-0.5em}
+\subsubsection{动机}
+\vspace{-0.5em}
+\indent{}由于输入/输出没有引用透明性且带有副作用，它们和纯函数式语言是不相容的。IO monad通过将做I/O的计算
+限制在IO monad里来解决该问题。
+
+\vspace{-0.5em}
+\subsubsection{定义}
+\vspace{-0.5em}
+\indent{}IO monad的定义是与平台相关的（platform-specific）。没有可以用于将数据从IO monad中移出的数据构造器或函数
+被提供，这使得IO monad是一个单向monad，而这一点是保证函数式程序安全性的基础。它将IO monad中的命令式风格的
+副作用或非引用透明的动作隔离起来。
+
+\indent{}在整篇文章中，我们都将monadic值称为计算。然而，IO monad中的值通常被称为I/O动作（I/O actions），我们会在
+这里使用这个更为贴切的术语。
+
+\indent{}在Haskell中，顶层（top-level）的\texttt{main}函数的类型必须是\texttt{IO ()}，这样一来程序通常在顶层被构建
+为一个命令式风格的I/O动作序列和对函数式风格代码的调用。从\texttt{IO}模块导出的函数本身并不做I/O，而是返回I/O动作，
+这些I/O动作描述了要执行的I/O操作。I/O动作可以在IO monad中合并（以纯函数式的方式）以创建更为复杂的I/O动作，则
+最终的I/O动作即为程序的\texttt{main}值。
+
+\indent{}标准prelude和\texttt{IO}模块定义了很多可以用于IO monad中的函数，任何Haskell程序员无疑都会熟悉其中的
+一些。这里，我们将仅讨论IO monad的monadic的方面，而非所有的那些函数。
+
+\indent{}\texttt{IO}类型构造器是\texttt{Monad}类与\texttt{MonadError}类的实例，其中error的类型是\texttt{IOError}。
+\texttt{fail}被定义为抛出一个以字符串参数建立的error。如果导入（import）了\texttt{Control.Monad.Error}模块，就
+可以在\texttt{IO} monad中使用其中的异常机制。同样的机制还有\texttt{IO}模块导出的其他名称：
+\texttt{ioError}和\texttt{catch}。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+instance Monad IO where
+    return a  =  ...   -- function from a -> IO a
+    m >>= k   =  ...   -- executes the I/O action m and binds the value to k's input
+    fail s    =  ioError (userError s)
+
+data  IOError = ...
+
+ioError :: IOError -> IO a
+ioError = ...
+
+userError :: String -> IOError
+userError = ...
+
+catch :: IO a -> (IOError -> IO a) -> IO a
+catch = ...
+
+try :: IO a -> IO (Either IOError a)
+try f = catch (do r <- f
+                  return (Right r))
+              (return . Left)
+\end{minted}
+
+\noindent{}\texttt{IO} monad作为\texttt{MonadError}的实例被纳入Monad模板库中：
+\vspace{-0.2em}
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+instance Error IOError where
+  ...
+
+instance MonadError IO where
+    throwError = ioError
+    catchError = catch
+\end{minted}
+\noindent{}\texttt{IO}模块导出了一个名为\texttt{try}的便利的函数，它执行I/O动作，且能在一个I/O错误被捕获时
+返回\texttt{Left IOError}，或在动作成功时返回\texttt{Right result}。
+
+\vspace{-0.5em}
+\subsubsection{例子}
+\vspace{-0.5em}
+\indent{}下面的例子展示了命令\texttt{tr}的部分实现，这个命令将将标准输入流拷贝到标准输出流，字符转换由命令行
+参数控制。它展示了与\texttt{IO} monad协同使用的\texttt{MonadError}的异常处理机制。
+\vspace{-0.5em}
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+import Monad
+import System
+import IO
+import Control.Monad.Error
+
+-- translate char in set1 to corresponding char in set2
+translate :: String -> String -> Char -> Char
+translate []     _      c  =  c
+translate (x:xs) []     c  =  if x == c then ' ' else translate xs []  c
+translate (x:xs) [y]    c  =  if x == c then  y  else translate xs [y] c
+translate (x:xs) (y:ys) c  =  if x == c then  y  else translate xs ys  c
+
+-- translate an entire string
+translateString :: String -> String -> String -> String
+translateString set1 set2 str = map (translate set1 set2) str
+
+usage :: IOError -> IO ()
+usage e = do putStrLn "Usage: ex14 set1 set2"
+             putStrLn "Translates characters in set1 on stdin to the corresponding"
+             putStrLn "characters from set2 and writes the translation to stdout."
+
+-- translates stdin to stdout based on commandline arguments
+main :: IO ()
+main = (do [set1, set2] <- getArgs
+           contents     <- hGetContents stdin
+           putStr $ translateString set1 set2 contents) `catchError` usage
+\end{minted}
+\clearpage
+
+\subsection{The State monad}
+\begin{itemize}[leftmargin=*,topsep=0pt,itemsep=0pt]
+\item \textbf{计算的类型：}维护状态的计算
+\item \textbf{Binding策略：}将一个状态参数贯穿于bound function序列中，因而同一状态不会被使用两次，这
+                            $\textrm{ }\quad\quad\quad\quad\quad\;\;\quad$样会给人一种原地更新的错觉
+\item \textbf{适用于：}从需要共享状态的操作序列中构建计算
+\item \textbf{zero 与 plus：}无
+\item \textbf{样例类型：}\texttt{State st a}
+\end{itemize}
+
+\vspace{-1em}
+\subsubsection{动机}
+\vspace{-0.5em}
+\indent{}纯函数式语言不能原地更新值，因为这会打破引用透明性。模拟这种带状态的计算的惯用法是将一个状态参数
+“贯穿（thread）”于一个函数序列中：
+\vspace{-0.8em}
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+data MyType  =  MT Int Bool Char Int deriving Show
+
+makeRandomValue :: StdGen -> (MyType, StdGen)
+makeRandomValue g  =  let (n,g1) = randomR (1,100)   g
+                          (b,g2) = random  g1
+                          (c,g3) = randomR ('a','z') g2
+                          (m,g4) = randomR (-n,n)    g3
+                      in (MT n b c m, g4)
+\end{minted}
+\noindent{}这样做能起作用，但是这样的代码很容易出错，很乱而且难以维护。State monad将状态参数的threading隐
+藏在binding操作中，同时也使代码更易编写，更容易读，也更容易修改。
+
+\vspace{-0.8em}
+\subsubsection{定义}
+\vspace{-1.5em}
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+newtype State s a  =  State { runState :: (s -> (a,s)) }
+
+instance Monad (State s) where
+    return a         =  State $ \s -> (a,s)
+    (State x) >>= f  =  State $ \s -> let (v,s') = x s in runState (f v) s'
+\end{minted}
+\noindent{}State monad中的值被表示为从一个初始状态到\texttt{(value, newState)}对的transition function，并且提供了一个
+newtype 定义：\texttt{State s a}，它是在带有类型为\texttt{s}的状态的state monad中类型为\texttt{a}的值的类型。
+\texttt{MonadState}类为state monad提供了一个标准而简单的接口：
+\vspace{-0.5em}
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+class MonadState m s | m -> s where
+    get :: m s
+    put :: s -> m ()
+
+instance MonadState (State s) s where
+    get    =  State $ \s -> (s,s)
+    put s  =  State $ \_ -> ((),s)
+\end{minted}
+\noindent{}\texttt{get}函数通过将状态拷贝并作为value对其进行检索。\texttt{put}设置monad状态但不给出值。
+
+\indent{}还有许多基于\texttt{get}和\texttt{put}构建的额外的有用函数，这些函数进行更为复杂的计算。这里不详细
+展开了，具体内容可以参见Haskell的state monad库。
+
+\subsubsection{例子}
+\indent{}先来熟悉一下本节提到的几个函数的简单用法：
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+-- "return" set the result value but leave the state unchanged
+runState (return 'X') 1  -- => ('X', 1)
+
+-- "get" set the result value to the state and leave the state unchanged
+runState get 1  -- => (1, 1)
+
+-- "put" set the result value to () and set the state value
+runState (put 5) 1  -- => ((), 5)
+\end{minted}
+
+\indent{}State monad的一个简单应用是将随机数生成器的状态贯穿于对生成函数的多次调用中。
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+data MyType = MT Int Bool Char Int deriving Show
+
+{- Using the State monad, we can define a function that returns
+   a random value and updates the random generator state at
+   the same time.
+-}
+getAny :: (Random a) => State StdGen a
+getAny = do g      <- get
+            (x,g') <- return $ random g
+            put g'
+            return x
+
+-- similar to getAny, but it bounds the random value returned
+getOne :: (Random a) => (a,a) -> State StdGen a
+getOne bounds = do g      <- get
+                   (x,g') <- return $ randomR bounds g
+                   put g'
+                   return x
+
+{- Using the State monad with StdGen as the state, we can build
+   random complex types without manually threading the
+   random generator states through the code.
+-}
+makeRandomValueST :: StdGen -> (MyType, StdGen)
+makeRandomValueST = runState (do n <- getOne (1,100)
+                                 b <- getAny
+                                 c <- getOne ('a','z')
+                                 m <- getOne (-n,n)
+                                 return (MT n b c m))
+\end{minted}
+\clearpage
+
+\subsection{The Reader monad}
+\begin{itemize}[leftmargin=*,topsep=0pt,itemsep=0pt]
+\item \textbf{计算的类型：}从共享环境中读值的计算
+\item \textbf{Binding策略：}Monad值是从环境到值的函数，bound function与bound value都可访问共享环境
+\item \textbf{适用于：}维护变量绑定，或用于其它共享环境
+\item \textbf{zero 与 plus：}无
+\item \textbf{样例类型：}\texttt{Reader [(String, Value)] a}
+\end{itemize}
+
+\subsubsection{动机}
+\indent{}一些编程问题需要在共享环境（或一个变量绑定集合）中做计算。这些计算需要从共享环境中读值，并且有时候
+还需要在修改的环境（绑定被覆盖，或有新的绑定）中执行子计算。
+Reader monad就是针对这些类型的计算特殊设计的，比起使用state monad，它们在这些情况下更为清晰和简洁。
+
+\subsubsection{定义}
+\indent{}下面的定义用到了不在Haskell 2010中的语言扩展：多参数类型类与funDeps，但这并不妨碍我们去用好reader monad，尽管
+我们可能并不太了解这些扩展。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+newtype Reader e a  =  Reader { runReader :: (e -> a) }
+
+instance Monad (Reader e) where
+    return a          =  Reader $ \e -> a
+    (Reader r) >>= f  =  Reader $ \e -> runReader (f (r e)) e
+\end{minted}
+\noindent{}Reader monad中的值是从环境到值的函数。为了从reader monad中的计算里提取最终的值，可以简单地
+将\texttt{(runReader reader)}应用到环境值上。
+
+\indent{}\texttt{return}函数会创建这样一个\texttt{Reader}：它忽略环境并给出给定的值。而binding操作会创建
+这样一个\texttt{Reader}：它使用环境对\texttt{>>=}左侧的值进行提取，再在相同的环境中
+将bound function应用到提取到的值上。再来看看\texttt{MonadReader}类：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+class MonadReader e m | m -> e where
+    ask   :: m e
+    local :: (e -> e) -> m a -> m a
+
+instance MonadReader e (Reader e) where
+    ask        =  Reader id
+    local f c  =  Reader $ \e -> runReader c (f e)
+
+asks :: (MonadReader e m) => (e -> a) -> m a
+asks sel  =  ask >>= return . sel
+\end{minted}
+\noindent{}\texttt{MonadReader}类提供了一些有用的函数。\texttt{ask}函数从环境中检索，而\texttt{local}函数
+在一个修改的环境中执行计算。\texttt{asks}检索当前环境的函数，并通常与选择器（selector）或查找函数一起使用。
+
+\subsubsection{例子}
+\indent{}考虑模板实例化的问题，这可能包含变量替换与模板引入。使用reader monad，我们可以维护一个环境，这个环境
+是有关所有已知模板与所有已知的变量绑定的。之后，当变量替换发生时，我们可以用\texttt{asks}函数来查找变量的值。
+而当一个带有新的变量定义的模板被引入时，我们可以使用\texttt{local}函数在包含额外变量绑定的修改后的环境中
+解析（resolve）模板。
+\vspace{-0.8em}
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+-- This the abstract syntax representation of a template
+--                  Text       Variable     Quote        Include                   Compound
+data Template    =  T String | V Template | Q Template | I Template [Definition] | C [Template]
+data Definition  =  D Template Template
+
+-- Our environment consists of two association lists
+data Environment = Env {templates::[(String,Template)], variables::[(String,String)]}
+
+-- lookup a variable from the environment
+lookupVar :: String -> Environment -> Maybe String
+lookupVar name env  =  lookup name (variables env)
+
+-- lookup a template from the environment
+lookupTemplate :: String -> Environment -> Maybe Template
+lookupTemplate name env  =  lookup name (templates env)
+
+-- add a list of resolved definitions to the environment
+addDefs :: [(String,String)] -> Environment -> Environment
+addDefs defs env  =  env {variables = defs ++ (variables env)}
+
+-- resolve a Definition and produce a (name,value) pair
+resolveDef :: Definition -> Reader Environment (String,String)
+resolveDef (D t d) = do name <- resolve t
+                        value <- resolve d
+                        return (name,value)
+
+-- resolve a template into a string
+resolve :: Template -> Reader Environment (String)
+resolve (T s)    = return s
+resolve (V t)    = do varName  <- resolve t
+                      varValue <- asks (lookupVar varName)
+                      return $ maybe "" id varValue
+resolve (Q t)    = do tmplName <- resolve t
+                      body     <- asks (lookupTemplate tmplName)
+                      return $ maybe "" show body
+resolve (I t ds) = do tmplName <- resolve t
+                      body     <- asks (lookupTemplate tmplName)
+                      case body of
+                        Just t' -> do defs <- mapM resolveDef ds
+                                      local (addDefs defs) (resolve t')
+                        Nothing -> return ""
+resolve (C ts)   = (liftM concat) (mapM resolve ts)
+\end{minted}
+\clearpage
+
+\subsection{The Writer monad}
+\begin{itemize}[leftmargin=*,topsep=0pt,itemsep=0pt]
+\item \textbf{计算的类型：}产生计算值与数据流的计算
+\item \textbf{Binding策略：}Writer monad值是\texttt{(computation value, log value)}对。Binding会将计算值替
+                            $\textrm{ }\quad\quad\quad\quad\quad\;\;\quad$
+                            换为把bound function应用到之前的值上得到的结果，并且将计算中的任何日志数
+                            $\textrm{ }\quad\quad\quad\quad\quad\;\;\quad$
+                            据追加（append）到现有日志数据中。
+\item \textbf{适用于：}记录（logging），或其它产生副产物输出（output ``on the side''）的计算
+\item \textbf{zero 与 plus：}无
+\item \textbf{样例类型：}\texttt{Writer [String] a}
+\end{itemize}
+
+\subsubsection{动机}
+\indent{}很多时候我们想要一个产生副产物的输出，日志和追踪（tracing）信息就是最常见的例子。这种作为“副产物”的数据
+在执行计算时被生成出来，但并不作为计算的主要结果，我们只是想保留它们。
+
+\indent{}显式地管理日志或追踪数据会使代码变得杂乱，并可能招致一些细微的错误，比如漏日志。Writer monad提供了
+一种管理这种输出的更为干净的方式，而不使主计算变得混乱。
+
+\subsubsection{定义}
+\indent{}为了能够理解这里的定义，有关monoid（幺半群）的知识是必须要了解的。monoid比monad要简单一些，这里简单介绍
+一下：幺半群是一个带有可结合二元运算和单位元的代数结构。一个monoid要遵从一些数学定律：结合律、单位元与封闭性。
+你可能会发现这些定律与\texttt{MonadPlus}实例的\texttt{mzero}与\texttt{mplus}上的定律是一样的，因为带有zero与plus的
+monad同时也是monoid。带有二元加法和单位元0的自然数，带有二元乘法与单位元1的自然数，这两者都是数学上monoid的经典例子。
+
+\indent{}在Haskell中，一个monoid包括一个类型，一个单位元，还有一个二元运算。Haskell在模组\texttt{Data.Monoid}中定义了
+\texttt{Monoid}类，以此提供使用monoids的标准框架：单位元命名为\texttt{mempty}，二元操作命名为\texttt{mappend}。Haskell
+中最常用的标准monoid包括list和类型为\texttt{(a -> a)}的函数。
+
+\indent{}在将list作为monoid用于Writer时应该小心，因为随着输出规模的增长，可能会出现与\texttt{mappend}操作相关的
+性能问题。这种情况下，最好选用支持快速追加操作的数据结构。
+
+\indent{}如下所示，writer monad维护一个\texttt{(value, log)}对。在这个pair中，日志（log）的类型必须是
+一个monoid。\texttt{return}函数简单地返回带有空日志的值。Binding操作将当前的值作为bound function的输入，
+并将输出日志追加到现有日志中。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+newtype Writer w a  =  Writer { runWriter :: (a,w) }
+
+instance (Monoid w) => Monad (Writer w) where
+    return a              =  Writer (a,mempty)
+    (Writer (a,w)) >>= f  =  let (a',w') = runWriter $ f a
+                             in Writer (a',w `mappend` w')
+\end{minted}
+
+\indent{}上面的定义用到了不在 Haskell 2010 中的语言扩展:多参数类型类与 funDeps，但这并不妨碍我们用好Writer monad，
+尽管我们可能并不太了解这些扩展。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+class (Monoid w, Monad m) => MonadWriter w m | m -> w where
+    pass   :: m (a, w -> w) -> m a
+    listen :: m a -> m (a,w)
+    tell   :: w -> m ()
+
+instance (Monoid w) => MonadWriter w (Writer w) where
+    pass   (Writer ((a,f),w)) = Writer (a,f w)
+    listen (Writer (a,w))     = Writer ((a,w),w)
+    tell   s                  = Writer ((),s)
+
+listens :: (MonadWriter w m) => (w -> b) -> m a -> m (a,b)
+listens f m = do (a,w) <- listen m
+                 return (a,f w)
+
+censor :: (MonadWriter w m) => (w -> w) -> m a -> m a
+censor f m = pass $ do a <- m
+                       return (a,f)
+\end{minted}
+\noindent{}最为简单而有用的函数是\texttt{tell}，它为日志添加一个或多个条目。\texttt{listen}函数将一个writer转为另一个。
+待转的writer返回\texttt{a}并产生输出\texttt{w}，它被转为另一个writer，这个writer产生值\texttt{(a,w)}且仍旧产生输出
+\texttt{w}。这使得计算可以“监听”writer生成的日志输出。\texttt{pass}函数有点复杂，它也将一个writer转为另一个。待转的writer
+产生值\texttt{(a,f)}且产生输出\texttt{w}，它被转为一个产生值\texttt{a}而产生输出\texttt{f w}的writer。这略显麻烦，因而
+通常会使用辅助函数\texttt{censor}。\texttt{censor}取一个函数和一个writer，并产生一个新的writer，它的输出
+与给定的那个writer相同，但其日志条目是被给定的那个函数修改过的。
+
+\indent{}还有一个叫\texttt{listens}（注意，不是\texttt{listen}）的函数。除了日志部分要被所提供的函数修改外，
+这个函数做的事情和\texttt{listen}是相同的。
+
+\subsubsection{例子}
+在这个例子中，让我们想象一个非常简单的防火墙，它会对数据包做过滤。过滤会按照关于源/目的主机与
+数据包有效负载的匹配规则来进行。这个防火墙主要的工作是对数据包进行过滤，但我们也想让它产生活动日志，以便
+追踪与过滤相关的信息。
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+-- this is the format of our log entries
+data Entry = Log {count::Int, msg::String} deriving Eq
+
+-- add a message to the log
+logMsg :: String -> Writer [Entry] ()
+logMsg s = tell [Log 1 s]
+
+-- this handles one packet
+filterOne :: [Rule] -> Packet -> Writer [Entry] (Maybe Packet)
+filterOne rules packet = do
+        rule <- return (match rules packet)
+        case rule of
+                Nothing  -> do
+                        logMsg $ "DROPPING UNMATCHED PACKET: " ++ (show packet)
+                        return Nothing
+                (Just r) -> do
+                        when (logIt r) $ logMsg ("MATCH: " ++ (show r) ++ " <=> " ++ (show packet))
+                        case r of (Rule Accept _ _) -> return $ Just packet
+                                  (Rule Reject _ _) -> return Nothing
+\end{minted}
+\indent{}可以看到，这是很简单的。但是如果我们想要将几条连续重复的日志条目进行合并呢？现有的这些函数没办法
+让我们修改前几个阶段的计算过程的输出，但我们可以使用“惰性日志”技巧，只有当我们得到一个新的无重复条目时，才将
+日志加入。
+\vspace{-0.5em}
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+-- merge identical entries at the end of the log
+-- This function uses [Entry] as both the log type and the result type.
+-- When two identical messages are merged, the result is just the message
+-- with an incremented count.  When two different messages are merged,
+-- the first message is logged and the second is returned as the result.
+mergeEntries :: [Entry] -> [Entry] -> Writer [Entry] [Entry]
+mergeEntries []   x    = return x
+mergeEntries x    []   = return x
+mergeEntries [e1] [e2] = let (Log n msg)   = e1
+                             (Log n' msg') = e2
+                         in if msg == msg' then
+                              return [(Log (n+n') msg)]
+                            else
+                              do tell [e1]
+                                 return [e2]
+
+-- This is a complex-looking function but it is actually pretty simple.
+-- It maps a function over a list of values to get a list of Writers,
+-- then runs each writer and combines the results.  The result of the function
+-- is a writer whose value is a list of all the values from the writers and whose
+-- log output is the result of folding the merge operator into the individual
+-- log entries (using 'initial' as the initial log value).
+groupSame :: (Monoid a) => a -> (a -> a -> Writer a a) -> [b] -> (b -> Writer a c) -> Writer a [c]
+groupSame initial merge []     _  = do tell initial
+                                       return []
+groupSame initial merge (x:xs) fn = do (result,output) <- return (runWriter (fn x))
+                                       new             <- merge initial output
+                                       rest            <- groupSame new merge xs fn
+                                       return (result:rest)
+
+-- this filters a list of packets, producing a filtered packet list and a log of
+-- the activity in which consecutive messages are merged
+filterAll :: [Rule] -> [Packet] -> Writer [Entry] [Packet]
+filterAll rules packets = do tell [Log 1 "STARTING PACKET FILTER"]
+                             out <- groupSame [] mergeEntries packets (filterOne rules)
+                             tell [Log 1 "STOPPING PACKET FILTER"]
+                             return (catMaybes out)
+\end{minted}
+\clearpage
+
+\subsection{The Continuation monad}
+\begin{itemize}[leftmargin=*,topsep=0pt,itemsep=0pt]
+\item \textbf{计算的类型：}可被中断和恢复的计算
+\item \textbf{Binding策略：}将函数绑到monadic的值上，产生一个将函数用作monadic计算的延续的新的延续
+\item \textbf{适用于：}复杂的控制结构、错误处理、协程（co-routine）创建
+\item \textbf{zero 与 plus：}无
+\item \textbf{样例类型：}\texttt{Cont r a}
+\end{itemize}
+
+\subsubsection{动机}
+\noindent{}\textbf{注意！}在使用continuation monad前，请确保对延续传递风格（continuation-passing-style，CPS）有坚实的
+理解，并且确保延续代表了你所面对的特定问题的最佳解决方案。滥用continuation monad会导致代码无法被理解和维护。
+
+\indent{}延续代表了一个计算的“未来”，它是从中间结果到最终结果的函数。在延续传递风格中，计算从嵌套延续的序列中建立，以
+一个最后产生最终结果的延续（往往是\texttt{id}）终止。因为延续是表示计算的未来的函数，对延续函数的操纵，可以实现
+对计算的未来的复杂操纵。比如，在计算中间打断它、舍弃一部分计算、重启计算和交错执行计算。Continuation monad将CPS适配
+到了monad的结构中。
+
+\subsubsection{定义}
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+-- r is the final result type of the whole computation
+newtype Cont r a  =  Cont { runCont :: ((a -> r) -> r) }
+
+instance Monad (Cont r) where
+    return a        =  Cont $ \k -> k a                       -- i.e. return a = \k -> k a
+    (Cont c) >>= f  =  Cont $ \k -> c (\a -> runCont (f a) k) -- i.e. c >>= f = \k -> c (\a -> f a k)
+\end{minted}
+\noindent{}Continuation monad将计算以延续传递风格表示。\texttt{Cont r a}是一个CPS计算，它在一个最终返回类型
+为\texttt{r}的CPS计算中产生类型为\texttt{a}的中间结果。
+
+\indent{}\texttt{return}函数简单地创建了一个将值传递下去的延续。\texttt{>>=}操作将bound function加入延续链中。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+class (Monad m) => MonadCont m where
+    callCC :: ((a -> m b) -> m a) -> m a
+
+instance MonadCont (Cont r) where
+    callCC f = Cont $ \k -> runCont (f (\a -> Cont $ \_ -> k a)) k
+\end{minted}
+\noindent{}\texttt{MonadCont}类提供了\texttt{callCC}函数，它提供了一种逃逸延续机制。逃逸延续可使你抛弃当前
+的计算，并立即返回一个值。这可以达到与\texttt{Error} monad中\texttt{throwError}和\texttt{catchError}相同的效果。
+
+\indent{}\texttt{callCC}将当前延续作为参数来调一个函数。使用\texttt{callCC}的标准惯用法是提供一个lambda表达式
+为这个延续命名，然后在它（即lambda）的scope的某个位置调用该命名延续来从计算中逃逸。
+
+\indent{}除了\texttt{callCC}提供的逃逸机制，continuation monad还可被用来实现其它非常强力的操纵机制。不过，它们
+都有非常特定的用途，而且滥用它们很容易就会使代码难以被理解，因而这里不会提及。
+
+\subsubsection{例子}\label{sssec:cont_example}
+这里我们给出一个例子，展示逃逸机制是如何工作的。这里给出的示例函数使用逃逸延续在一个整数上进行复杂的变换。
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+{- We use the continuation monad to perform "escapes" from code blocks.
+   This function implements a complicated control structure to process numbers:
+
+   Input (n)       Output                       List Shown
+   =========       ======                       =========
+   0-9             n                            none
+   10-199          number of digits in (n/2)    digits of (n/2)
+   200-19999       n                            digits of (n/2)
+   20000-1999999   (n/2) backwards              none
+   >= 2000000      sum of digits of (n/2)       digits of (n/2)
+-}
+
+fun :: Int -> String
+fun n = (`runCont` id) $ do
+        str <- callCC $ \exit1 -> do                        -- define "exit1"
+          when (n < 10) (exit1 (show n))
+          let ns = map digitToInt (show (n `div` 2))
+          n' <- callCC $ \exit2 -> do                       -- define "exit2"
+            when ((length ns) < 3) (exit2 (length ns))
+            when ((length ns) < 5) (exit2 n)
+            when ((length ns) < 7) $ do let ns' = map intToDigit (reverse ns)
+                                        exit1 (dropWhile (=='0') ns')  --escape 2 levels
+            return $ sum ns
+          return $ "(ns = " ++ (show ns) ++ ") " ++ (show n')
+        return $ "Answer: " ++ str
+\end{minted}

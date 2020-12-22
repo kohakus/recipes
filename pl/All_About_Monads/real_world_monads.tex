@@ -1,0 +1,316 @@
+\section{现实世界中的Monad}
+\indent{}我们在第一部分介绍了monad的概念，并在第二部分给出了对于那些既常见又有用的monads的一些理解。
+然而，这些内容对于将monads应用于实践中仍然是不够的，因为在现实世界中你会经常希望能够做一些将几种monads的概念
+结合在一起的计算。比如说，带状态的非确定性计算，或者是利用了延续而又做I/O的计算。当一个计算是另一计算的严格
+子集时，分别进行monad计算是可能的，除非子计算要在单向monad中进行。
+
+\indent{}通常，计算不会是孤立进行的。在这种情况下，我们需要的是将两种monads的特性结合进一个单独计算的那种monad。
+如果每次需要一个新的计算时我们都去写带有所需特性的新的monad，将会是非常低效和糟糕的。与此相反，我们会
+希望能够建立起一种将标准monads结合在一起来产生所需的混合型monad的方式。能够让我们做这件事的技术被称为monad变换器。
+
+\indent{}Monad 变换器是本部分的主题，我们会通过重温前面的例子来看到monad变换器是如何被
+使用来为这些例子增加更多现实功能的。
+
+\subsection{用笨办法组合Monads}
+\indent{}在研究monad变换器的使用之前，先来看一下如何在不使用monad变换器的情形下将monads组合起来。这是非常有用的，
+它可以让我们更为深刻地了解在对monads进行组合时会出现的问题，并且提供了一个baseline以显示monad变换器的优势。
+我们将使用~\ref{sssec:cont_example}~中的例子来展示这些问题。
+
+\vspace{-0.5em}
+\subsubsection{嵌套monads}\label{sssec:nested_monads}
+\indent{}有些计算的结构足够简单，monadic的计算可以嵌套，避免了将monad组合在一起的需求。在Haskell中，所有发生在
+IO monad中的计算都是位于顶层的，因而到目前为止我们看到的所有例子实际上都是使用了嵌套monadic计算的技术。计算在
+一开始就执行所有的输入（通常是通过从命令行读参数），然后将值传递给monadic计算来产生结果，并最终在结束时执行输出。
+这种结构避免了monad组合的问题，但会显得这些例子很刻意。
+
+\indent{}前述~\ref{sssec:cont_example}~中的例子遵循了嵌套的模式：在IO monad中，从命令行读一个数，然后将这个数传给
+continuation monad中的计算并产生一个字符串，接着再把这个字符串在IO monad中写回。IO monad中的计算并没有被限制为从
+命令行读或写字符串，它们可以是任意复杂的。同样地，内部的计算也可以是任意复杂的。只要内部的计算不依赖于外部monad的
+功能，它就可以在外部monad中安全地被嵌套。如下方的~\ref{sssec:cont_example}~例子的变体所示，它从stdin中读
+而非使用命令行参数：
+\vspace{-0.5em}
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+fun :: IO String
+fun = do n <- (readLn::IO Int)         -- this is an IO monad block
+         return $ (`runCont` id) $ do  -- this is a Cont monad block
+           str <- callCC $ \exit1 -> do
+             when (n < 10) (exit1 (show n))
+             let ns = map digitToInt (show (n `div` 2))
+             n' <- callCC $ \exit2 -> do
+               when ((length ns) < 3) (exit2 (length ns))
+               when ((length ns) < 5) (exit2 n)
+               when ((length ns) < 7) $ do let ns' = map intToDigit (reverse ns)
+                                           exit1 (dropWhile (=='0') ns')
+               return $ sum ns
+             return $ "(ns = " ++ (show ns) ++ ") " ++ (show n')
+           return $ "Answer: " ++ str
+\end{minted}
+
+\vspace{-0.8em}
+\subsubsection{合并monads}\label{sssec:comb_monads_hard}
+\indent{}如果是带有更加复杂的结构的计算呢？如果嵌套模式不能够被使用，我们就需要一种将两个或多个monads的属性
+结合在一个单独计算中的方法。这是通过在这样一个monad中做计算做到的，这个monad中的值本身也是另一个monad中的
+monadic值。举例来说，如果我们需要在continuation monad中的计算中做I/O的话，我们可能会想要在类型为
+\texttt{Cont (IO String) a}的continuation monad中做计算。我们可以使用一个类型为\texttt{State (Either Err a) a}的
+monad以在一个单独的计算中组合state monad与error monad的特性。
+
+\indent{}考虑修改一下我们的例子：我们在开始时仍旧做相同的I/O，但在continuation monad中的计算的中途，我们可能
+会需要额外的输入。在这种情况下，当输入值在一定范围内时，我们将允许用户指定部分输出值。由于I/O依赖于
+continuation monad中的部分计算，而该计算又依赖于I/O的结果，所以我们不能使用嵌套monad模式。
+
+\indent{}与之不同，我们会这样做：让continuation monad中的计算使用IO monad的值。过去是\texttt{Int}和\texttt{String}类型的
+值，现在则成为了类型为\texttt{IO Int}与\texttt{IO String}类型的值。我们不可以从IO monad中将值抽出（因为是单向monad），因而
+我们可能需要稍稍在continuation monad中嵌套IO monad的do block以操纵值。这里我们使用了一个辅助函数\texttt{toIO}。当我们
+创建位于在continuation monad中嵌套的IO monads中的值时，它会使过程显得更加清晰一些。
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+toIO :: a -> IO a
+toIO x = return x
+
+fun :: IO String
+fun = do n <- (readLn::IO Int)         -- this is an IO monad block
+         convert n
+
+convert :: Int -> IO String
+convert n = (`runCont` id) $ do        -- this is a Cont monad block
+              str <- callCC $ \exit1 -> do    -- str has type IO String
+                when (n < 10) (exit1 $ toIO (show n))
+                let ns = map digitToInt (show (n `div` 2))
+                n' <- callCC $ \exit2 -> do   -- n' has type IO Int
+                  when ((length ns) < 3) (exit2 (toIO (length ns)))
+                  when ((length ns) < 5) (exit2 $ do putStrLn "Enter a number:"
+                                                     x <- (readLn::IO Int)
+                                                     return x)
+                  when ((length ns) < 7) $ do let ns' = map intToDigit (reverse ns)
+                                              exit1 $ toIO (dropWhile (=='0') ns')
+                  return (toIO (sum ns))
+                return $ do num <- n'  -- this is an IO monad block
+                            return $ "(ns = " ++ (show ns) ++ ") " ++ (show num)
+              return $ do s <- str -- this is an IO monad block
+                          return $ "Answer: " ++ s
+\end{minted}
+
+\subsection{Monad变换器}
+\indent{}在~\ref{sssec:comb_monads_hard}~中，我们以一种方式将monads结合在一起。同时我们也可以看到，即使是那样一个
+trivial的例子就已经十分混乱与丑陋了，那样的做法确实是很糟糕的，尽管它能起作用。
+将~\ref{sssec:nested_monads}~与~\ref{sssec:comb_monads_hard}~中的两块代码并排比较一下，就能看到手动对monads进行组合的
+策略对代码的污染性。
+
+\indent{}Monad变换器是标准monads的特殊变体，它们为monads的组合提供了便利。它们的类型构造器是在monad类型构造器上参数化的，
+并且产生了合并的monadic类型。
+
+\vspace{-0.5em}
+\subsubsection{变换器类型构造器（Transformer type constructors）}
+\indent{}就Haskell对monad的支持而言，类型构造器是其基础构件。回想一下，\texttt{Reader r a}是这样一种值的类型：
+带有类型为\texttt{r}的环境的reader monad内的类型为\texttt{a}的值。类型构造器\texttt{Reader r}是\texttt{Monad}类的
+实例，并且函数\texttt{runReader::(r->a)}执行reader monad中的计算并返回类型为\texttt{a}的值。
+
+\indent{}所谓的\texttt{ReaderT}是reader monad的变换器版本，它含有一个作为额外参数加入的monad类型构造器。
+\texttt{ReaderT r m a}是这样一种组合monad的值的类型：reader是基-monad，且\texttt{m}是其内部的monad。
+\texttt{ReaderT r m}是\texttt{Monad}类的实例，且函数\texttt{runReaderT::(r -> m a)}执行组合monad中的计算，
+并返回类型为\texttt{m a}的结果。
+
+\indent{}我们可以使用monads的变换器版本来轻松地创建组合monads。比如，\texttt{ReaderT r IO}组合了reader monad和
+IO monad。我们也可以通过将monads的变换器版本应用到Identity monad上来生成与之对应的monad的非变换器版本。比如，
+\texttt{ReaderT r Identity}与\texttt{Reader r}是相同的。
+
+\vspace{-0.5em}
+\subsubsection{Lifting}
+\indent{}当使用通过monad变换器创建的组合monad时，我们不需要显式地对内部的monad类型进行管理，这使得我们的代码
+更加清晰简单。我们不再通过在计算中添加额外的do block来操纵内部monad类型中的值，而是可以使用lifting操作将
+函数从内部monad带至组合monad。
+
+\indent{}回想\texttt{liftM}函数族，它们用于将非monadic函数lift进monad中。每个monad变换器都提供了\texttt{lift}函数，
+它用于将一个monadic计算lift进组合monad中。许多变换器还提供了\texttt{liftIO}函数，这是为IO monad提供的\texttt{lift}的
+优化版本。现在，让我们再来改写之前的例子：
+\begin{minted}[mathescape=true,
+               linenos,
+               numbersep=5pt,
+               autogobble,
+               frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+fun :: IO String
+fun = (`runContT` return) $ do
+        n   <- liftIO (readLn::IO Int)
+        str <- callCC $ \exit1 -> do     -- define "exit1"
+          when (n < 10) (exit1 (show n))
+          let ns = map digitToInt (show (n `div` 2))
+          n' <- callCC $ \exit2 -> do    -- define "exit2"
+            when ((length ns) < 3) (exit2 (length ns))
+            when ((length ns) < 5) $ do liftIO $ putStrLn "Enter a number:"
+                                        x <- liftIO (readLn::IO Int)
+                                        exit2 x
+            when ((length ns) < 7) $ do let ns' = map intToDigit (reverse ns)
+                                        exit1 (dropWhile (=='0') ns')  --escape 2 levels
+            return $ sum ns
+          return $ "(ns = " ++ (show ns) ++ ") " ++ (show n')
+        return $ "Answer: " ++ str
+\end{minted}
+
+\subsection{标准Monad变换器}
+\indent{}Haskell的基础库以类的形式为monad变换器提供了支持，这些类表示了monad变换器与标准monad的特别变换器版本。
+
+\subsubsection{MonadTrans 与 MonadIO}
+\indent{}定义在\texttt{Control.Monad.Trans}中的\texttt{MonadTrans}类只提供了一个函数：\texttt{lift}。就像我们
+在上面说过的，它将一个内部monad中的monadic计算lift到组合monad中。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+-- | The class of monad transformers.  Instances should satisfy the
+-- following laws, which state that 'lift' is a monad transformation:
+--     * @'lift' . 'return' = 'return'@
+--     * @'lift' (m >>= f) = 'lift' m >>= ('lift' . f)@
+class MonadTrans t where
+    lift :: (Monad m) => m a -> t m a
+\end{minted}
+
+\indent{}\texttt{MonadIO}类中的函数\texttt{liftIO}为IO操作的lifting提供了一个\texttt{lift}的优化版本。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+-- | Monads in which 'IO' computations may be embedded.
+class (Monad m) => MonadIO m where
+    liftIO :: IO a -> m a
+
+-- | @since 4.9.0.0
+instance MonadIO IO where
+    liftIO = id
+\end{minted}
+
+\subsubsection{标准Monads的变换器版本}
+\indent{}Monad模板库中的标准monads都有与非变换器版本对应的变换器版本。不过，并不是所有的monad变换器都做
+相同的变换。我们已经看到，\texttt{contT}变换器将形式为\texttt{(a->r) -> r}的延续变为形式为\texttt{(a->m r) -> m r}
+的延续。然而，\texttt{StateT}变换器与此不同，它将形式为\texttt{s -> (a,s)}的状态变换器函数变为形式为
+\texttt{s -> m (a,s)}的状态变换器函数。通常来说，并没有用于创建变换器版本的通用法则，它们的形式取决于其实际意义。
+
+\indent{}这里给出一份关于标准monad变换器的表格：
+\begin{table}[h]
+\begin{center}
+\resizebox{0.6\textwidth}{!}{%
+\begin{tabular}{cccc}
+\hline
+\textbf{标准Monad} & \textbf{变换器版本} & \textbf{原类型} & \textbf{合并类型} \\ \hline\hline
+Error & ErrorT & \texttt{Either e a} & \texttt{m (Either e a)} \\
+State & StateT & \texttt{s -> (a,s)} & \texttt{s -> m (a,s)} \\
+Reader & ReaderT & \texttt{r -> a} & \texttt{r -> m a} \\
+Writer & WriterT & \texttt{(a,w)} & \texttt{m (a,w)} \\
+Cont & ContT & \texttt{(a -> r) -> r} & \texttt{(a -> m r) -> m r}\\ \hline
+\end{tabular}}
+\end{center}
+\end{table}
+
+\indent{}注意，在做monad合并时，顺序是很重要的。\texttt{StateT s (Error e)}与\texttt{ErrorT e (State s)}是
+不同的。前者会产生\texttt{s -> Error e (a,s)}的组合类型，其中计算要么返回一个新的状态，要么产生一个错误。
+而后者会产生\texttt{s -> (Error e a,s)}的组合类型，其中计算总是返回一个新的状态，而值可以是一个错误或一个正常的值。
+
+\subsection{剖析Monad变换器}
+\indent{}在这一节中，我们将详细地看一下标准库中最有趣的变换器之一\texttt{StateT}的实现。研究这个变换器将会使你建立起
+对你所能在代码中用到的monad变换器机制的深入理解。
+
+\vspace{-0.5em}
+\subsubsection{组合的monad定义}
+\noindent{}就像之前state monad在如下定义上建立一样：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+newtype State s a = State { runState :: (s -> (a,s)) }
+\end{minted}
+\noindent{}变换器 StateT 在下面的定义上建立：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+newtype StateT s m a = StateT { runStateT :: (s -> m (a,s)) }
+\end{minted}
+\noindent{}\texttt{State s}既是\texttt{Monad}类的实例，也是\texttt{MonadState s}类的实例，因而
+\texttt{StateT s m}应该也一样是它们的实例。并且，如果\texttt{m}是\texttt{MonadPlus}的实例，那么
+\texttt{StateT s m}也应该是它的实例。
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+newtype StateT s m a = StateT { runStateT :: (s -> m (a,s)) }
+
+instance (Monad m) => Monad (StateT s m) where
+    return a          = StateT $ \s -> return (a,s)
+    (StateT x) >>= f  = StateT $ \s -> do (v,s')      <- x s
+                                          (StateT x') <- return $ f v
+                                          x' s'
+
+instance (Monad m) => MonadState s (StateT s m) where
+    get   = StateT $ \s -> return (s,s)
+    put s = StateT $ \_ -> return ((),s)
+\end{minted}
+\noindent{}将此与\texttt{State s}的定义对比，\texttt{return}使用了其内部monad的\texttt{return}，并且
+使用了一个do block以在其内部monad中执行计算。别忘了\texttt{StateT s m}也是\texttt{MonadPlus}的实例：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+instance (MonadPlus m) => MonadPlus (StateT s m) where
+    mzero = StateT $ \s -> mzero
+    (StateT x1) `mplus` (StateT x2) = StateT $ \s -> (x1 s) `mplus` (x2 s)
+\end{minted}
+
+\vspace{-0.5em}
+\subsubsection{定义lifting函数}
+\noindent{}最后我们还要提供\texttt{lift}函数，以使\texttt{StateT s}成为\texttt{MonadTrans}的实例：
+\begin{minted}[mathescape=true,
+               %linenos,
+               numbersep=5pt,
+               autogobble,
+               %frame=lines,
+               fontsize=\footnotesize,
+               bgcolor=bg,
+               framesep=2mm]{Haskell}
+instance MonadTrans (StateT s) where
+    lift c = StateT $ \s -> c >>= (\x -> return (x,s))
+\end{minted}
+\indent{}\texttt{lift}函数创建了一个\texttt{StateT}状态变换器函数，这个函数将内部monad中的计算绑定到
+一个将结果与输入状态打包的函数。结果是，一个返回list（即list monad中的计算）的函数可以
+被lift到\texttt{StateT s []}中，在那里它变成了一个返回\texttt{StateT (s -> [(a,s)])}的函数。也就是说，
+被提升（lifted）的计算会从其输入状态产生多个\texttt{(value,state)}对。其效果是去``fork'' StateT中的计算，
+并产生计算的一个（对于被提升的函数返回的list中的每个值的）不同分支。当然，将\texttt{StateT}应用到不同的
+monad上会为\texttt{lift}函数赋予不同的语义。
