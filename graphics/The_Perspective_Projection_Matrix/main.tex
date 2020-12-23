@@ -32,13 +32,14 @@ $P'$的坐标做归一化，就可以得到它在NDC坐标系下的表达，对�
 上（这取决于我们用的API的相应规定），这意味着视锥体的那部分空间被映射到一个立方体的空间中。当然了，如果我们使用的
 API将$z$轴坐标映射到$[0,1]\in\mathbb{R}$，那么确实不是一个立方体，因为映射后对应的是一个维度为$2\times 2\times 1$的
 空间，$z$轴坐标被映射至$[-1,1]\in\mathbb{R}$时，才对应于一个维度为$2\times 2\times 2$的立方体空间。不过这个差别并不重要，
-无论使用什么API，我们都是要将viewing frustum的空间映射到一个方的空间上，这个方的空间被称为 \textbf{Canonical viewing volume}。
+无论使用什么API，我们都是要将viewing frustum的空间映射到一个方的空间上，这个方的空间被称为 \textbf{Canonical Viewing Volume}。
 这个映射过程实际上就是viewing frustum被归一化的过程，也就是projection matrix要做的事情。
 
-\indent{}在之前的讨论中，我们将平移，旋转等变换描述为一个$4\times 4$矩阵。在笛卡尔坐标系中，一个三维的点是$3\times 3$的，那么
-我们没办法将点的坐标构成的向量与变换矩阵相乘，这不是很奇怪吗？另一方面，如果我们使用$3\times 3$的矩阵来描述变换操作，那么它
-没办法表达平移操作，只能通过再加上一个向量来表达平移，这种不统一的表达也非常让人不快。在实践中，我们解决上述问题的方法是
-使用\textbf{齐次坐标系（Homogeneous Coordinate）}。一个三维点在笛卡尔坐标系与齐次坐标系间的转换为：
+\indent{}在之前的讨论中，我们将平移，旋转等变换描述为一个$4\times 4$矩阵。然而，笛卡尔坐标系中的一个三维点是$1\times 3$的，
+我们没办法将三维点的坐标构成的向量与$4\times 4$的变换矩阵相乘。另一方面，如果我们打算使用$3\times 3$的矩阵来描述变换操作，
+我们会发现它无法表达平移操作，只能通过再加上一个三维向量来表达平移，这种不统一的表达也不免让人不快。
+在实践中，解决上述问题的方法是使用\textbf{齐次坐标系（Homogeneous Coordinate）}。
+一个三维点在笛卡尔坐标系与齐次坐标系间的转换为：
 
 \begin{displaymath}
 \textrm{Cartesian Point }[x, y, z] \;\; \overset{\textrm{Implicit Conversion}}{\longrightarrow} \;\;
@@ -252,8 +253,8 @@ clipping plane）}和\textbf{远剪裁平面（far clipping plane）}。另外�
 
 \indent{}出于计算方便的考虑，实践中的FOV往往是上述讨论中的角度的一半。在这里，为了表述上的便利，我们定义FOV为整个
 角度。实际用到的FOV可以是水平角或垂直角，上图中我们给出的是对应于水平角的FOV。如果screen window是
-方的，即其\textbf{长宽比（aspect ratio）}是$1$，那么具体采用哪个方向并无差别，因为角度是一样的。但如果不是这种
-情况，就需要明确我们使用的是哪个方向上的FOV了。在实践中，OpenGL采用的是垂直角，我们在这里采用了水平角。
+方的，即其\textbf{宽高比（aspect ratio）}是$1$，那么具体采用哪个方向并无差别，因为角度是一样的。但如果不是这种
+情况，就需要明确我们使用的是定义在哪个方向上的FOV了。在实践中，OpenGL采用的是垂直角，我们在这里采用了水平角。
 
 \indent{}为了将上述zoom out 与 zoom in 动作融入到目前的$4\times 4$透视投影矩阵中，我们需要对$x$与$y$的坐标值做scaling。
 假设screen是方的，并假设screen到眼的距离是单位距离，则根据简单的三角关系可以给出缩放因子$S$的表达，并得到更加完善
@@ -391,7 +392,7 @@ A = -\frac{f+n}{f-n}, \quad\; B = -\frac{2fn}{f-n}
 
 \begin{figure}[h]
 \centering
-\includegraphics[width=6cm]{./imgs/openglsetup.png}
+\includegraphics[width=5.2cm]{./imgs/openglsetup.png}
 \end{figure}
 
 \noindent{}给定aspect ratio的值$\phi$，field of view 的值 $fov$，则所求的四个参数的值为：
