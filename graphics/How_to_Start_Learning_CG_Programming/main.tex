@@ -1,0 +1,120 @@
+\documentclass[12pt]{article}
+\input{setting.tex}
+\renewcommand{\thesection}{\Roman{section}}
+\renewcommand{\thesubsection}{\thesection-\arabic{subsection}}
+
+\title{How to Start Learning Computer Graphics Programming}
+\author{Yiteng Zhang}
+
+\begin{document}
+\maketitle
+
+\noindent{}\textbf{注：}本文的内容来自Eric Arneb\"ack的博客文章，主要涉及如何以合理的方式开始学习计算机图形学编程
+的问题。由于觉得作者写得非常好，所以不免想要将其记录下来。这篇文章的重要价值在于它能够引导初学者，从而避免在
+初学时踩一些不必要的坑。实际上，如果没有正确的指引，一些坑总会很容易踩上去，并耗费初学者大量的时间，这种事对于迫切想要
+开始图形学编程的初学者而言其实是非常常见的。更可怕的是，这些不友好的坑往往会使一位满怀热情的初学者很快打退堂鼓，从而无缘
+进阶的有趣内容。一位无基础的学习者如果一开始就去学习OpenGL或Direct3D，那么上面描述的事情就很有可能会发生，毕竟
+无基础意味着不能正确地将图形学的学习和图形API的学习分开来看，这其实是很危险的。与之相对的，在有了一定的基础之后再进行
+图形API的学习，可以说是事半功倍。针对上述议题，Eric Arneb\"ack提出了一些很好的建议，在此将其转译整理。
+
+\subsection*{建议一：从光线追踪（Raytracing）和光栅化（Rasterization）开始}
+\indent{}近年来，用于针对GPU硬件来编码的API不断涌现，比如Direct3D、OpenGL、Vulkan、Metal还有WebGL等。从这些
+API开始学习的话，可能会是非常困难的，因为在使用它们时往往会涉及很多样板代码。实际上，这些图形API对初学者是
+非常不友好的，从它们开始是很糟糕的选择。对于毫无图形学基础的学习者而言，理解如何去绘制一个三角形都是颇为艰难的。
+当然了，我们也可以不从它们开始，而是选择像Unity或Unreal这样的游戏引擎。使用游戏引擎在这里的好处是，与图形API交流
+所涉及的那些繁琐工作将由它们完成。尽管如此，对于毫无基础的学习者而言，需要学习的有关游戏引擎的那套东西也还是太多了，
+应该将学习时间用在“刀刃”上。
+
+\indent{}对初学者的建议是，最好先自己动手写一下raytracer或software rasterizer（建议都搞一搞）。简单来说，\textbf{光线
+追踪渲染器（Raytracer）}是这样一种程序：通过从屏幕（\textbf{注：}这里应理解为camera screen）上的每个像素发出许多射线，并
+进行大量的求交与物理光照计算，来确定渲染所得图像上每个像素的最终颜色，从而渲出三维场景。而\textbf{软件光栅
+化渲染器（Software Rasterizer）}是这样渲染三维场景（多数时候是一堆三角形）的：对于每个我们想要绘制的三角形，去寻找
+它覆盖了屏幕上的哪些像素，然后我们计算与每个像素对应的三角形上的点是如何与光交互的，从而得到像素的最终颜色。之所以我们
+这里说“软件”光栅化渲染器，是因为它是相对于“硬件”（即GPU）而言的。这意味着我们是根据光栅化渲染的原理手动实现它，而
+不依赖于GPU，所以我们的software rasterizer跑在CPU上。
+
+\indent{}光栅化和光线追踪的原理实际上都挺简单的。所以对于初学者而言，动手实现它们要比理解现代图形API容易得多。并且，通过
+实现它们，我们可以接触到很多图形学基础概念，比如相机和变换矩阵等。这些时间不必浪费在与现代图形API较劲上（相信这带来的挫败
+感已经劝退了很多人）。
+
+\indent{}在学习某种图形API之前先写一个软件光栅化渲染器是很有好处的。一个很大的好处在于，我们会发现在使用图形API时如果
+某个地方出了问题，debug起来变得更容易了。这些图形API实际上只是提供了一个到基于GPU的光栅化渲染的接口，既然你了解
+这些API在幕后是如何工作的，那么debug起来自然会容易很多。
+
+\indent{}要写一个raytracer的话，读一读Peter Shirley的那三本小书\footnote{即Peter Shirley的\textit{Ray Tracing in One Weekend}
+系列}总是很好的选择。若是打算写一个software rasterizer，可以看看Scratchapixel上的相关内容。
+
+\subsection*{建议二：学点必要的数学知识}
+\indent{}第二点建议是学习一些计算机图形学基础所需的数学知识。这点其实不用太过担心，开展图形学编程所需的数学概念和方法
+其实出乎意料地少。作为图形学初学者，所需的数学工具一般只是一点有关线性代数的内容，大多数时候用到的数学概念列举如下：
+\begin{itemize}
+\item 点积（Dot Product）
+\item 叉积（Cross Product）
+\item 球坐标（Spherical Coordinates）
+\item 变换矩阵（Transformation Matrix）：多数时候都在处理$4\times 4$矩阵，所以别花时间研究大矩阵
+\item 旋转/缩放/平移矩阵（Rotation/Scaling/Translation Matrix）
+\item 齐次坐标（Homogeneous Coordinates）
+\item 四元数（Quaternions）
+\item 求交计算（Intersection calculations）：大部分时候是对射线与球或者射线与平面或三角形的求交
+\item 列主序（Column-major Order）与行主序（Row-major Order）：处理起来有点绕，请确保完全理解
+\item 如何用view matrix与perspective matrix建模相机：有点复杂，最好仔细深入学习一下
+\end{itemize}
+\noindent{}从初学者到有点基础的这个阶段，大多时候遇到的数学都不会超出上述范围。不过，一旦当你踏入“基于物理的渲染”
+这一主题时，微积分的相关知识也是必须的，但对于初学而言暂时还用不着。
+
+\subsection*{建议三：针对“绘制第一个三角形”时可能遇到的问题的一些Debug提示}
+\indent{}一旦写过一个raytracer或rasterizer，在学习图形API时就会更有自信。对于图形API的学习而言，你的hello world程序
+一般是在屏幕上绘制一个三角形。这听起来非常简单，但实际上它可能出乎意料地难，因为必须要写很多样板代码，而且图形学代码
+debug起来对初学者来说也并不容易。如果在绘制第一个三角形时出了问题，只看到一个黑屏而没有三角形，可以尝试下面列出的debug
+思路：
+\begin{itemize}
+\item 通常，问题出在projection matrix或view matrix上，它们挺容易出错的。在\textbf{顶点着色器（Vertex Shader）}中，每个
+顶点被model matrix、view matrix和projection matrix依次应用，最后再做一下perspective divide（这一步一般是在幕后自动完成的，不
+需要我们显式地做）。试着手动完成这个过程，好好检查一下用到的矩阵。如果你希望一个顶点是可见的，那么在做完perspective divide后它
+应该处于标准化设备坐标系中。其坐标的$x$与$y$的值应该都位于$[-1,+1]\in \mathbb{R}$。如果使用的是OpenGL，那么$z$的取值应该也在
+$[-1,+1]\in\mathbb{R}$中。但如果使用的是Direct3D，$z$的取值应该在$[0,+1]\in \mathbb{R}$中。坐标值具体在什么范围内取决于使用的
+API的相应约定，虽然这本身无关紧要，但为了得到正确的结果还是要注意检查一下。如果坐标值不在期望的范围内，那么你本希望可见
+的顶点实际上是不可见的，因为它们被剪裁掉了。
+\item 有没有记得用合理的值将depth buffer清理？举例来说，如果你在使用Direct3D，用了深度比较函数\texttt{D3DCMP\_LESS}，并接着把
+depth buffer清理为0，那么任何东西都不会被绘制，因为顶点都通不过深度测试。总之，请确保完全理解\textbf{深度测试（Depth Test）}，
+并正确地配置它。
+\item 确保矩阵被正确地传递给GPU。作为辅助，我们可以使用一些debug工具来验证它们是否被正确传递，比如RenderDoc。与此类似，请确保
+所有顶点数据也被正确地传递给GPU。只传递一部分顶点数据是一个很常见的错误。
+\item 另一个使人困扰的细节是\textbf{背面剔除（Back-face Culling）}。以OpenGL举例，背面三角形会被默认剔除掉。所以如果你搞了一个
+背面三角形并打算去渲它，是不会看到关于它的渲染结果的，因为被剔除掉了。关于这一点，建议先暂时把背面剔除禁用，这样可以让事情变得
+更清晰一些。
+\item 检查图形API给出的所有错误代码，里面可能会包含有用的信息。如果你所使用的API可以访问某种调试层（debugging layer），比
+如使用Vulkan这种API，那么最好将它开启。
+\item 对于任何类型的图形学编程，都强烈建议学着去用一用相关的GPU调试工具，比如RenderDoc或者Nsight之类的。这些工具可以
+给你提供与你的图形应用程序每一步对应的GPU状态信息的预览，方便你检查是否一切都处于正常工作的状态。
+\end{itemize}
+
+\subsection*{建议四：一些不错的练手项目}
+\indent{}自己动手去实现一下各种图形学技术，可能是学好图形学编程的最好方法。关于这一点，下面给出了一些适合新手实践的项目：
+\begin{itemize}
+\item 使用球坐标系做一个球面网格（sphere mesh），然后把它渲出来
+\item 实现漫反射（Diffuse）和镜面反射（Specular）着色器
+\item 实现方向光（Directional Lights）、点光源（Point Lights）和聚光灯（Spot Lights）
+\item 实现高度图（Heightmap）渲染
+\item 实现某种简单网格格式（比如.obj格式）的解析器，然后将网格导入到项目中进行渲染，并尝试导入和渲染带纹理（textures）的网格
+\item 实现一个简单的Minecraft风格的渲染器，这不是很难，而且很有学习价值
+\item 使用立方体贴图（Cube Mapping）来渲染反射效果
+\item 使用阴影贴图（Shadow Mapping）来渲染阴影效果
+\item 实现视锥体剔除（View Frustum Culling），这是简单而实用的优化技术
+\item 实现粒子系统（Particle system）的渲染
+\item 学习如何实现伽马矫正（Gamma Correction）
+\item 实现法线贴图（Normal Mapping）
+\item 学习使用实例渲染（Instanced Rendering）来高效渲染大量网格
+\item 使用网格蒙皮（Skinning）来做动画
+\end{itemize}
+\noindent{}还有一些更高级一点的技术：
+\begin{itemize}
+\item 实现各种后处理效果，比如使用高斯模糊做辉光（Bloom）、屏幕空间环境光遮蔽（SSAO）、抗锯齿/反走样（Anti-aliasing）、
+快速近似抗锯齿（FXAA）等
+\item 实现延迟着色（Deferred Shading），这是一种有效的多光源渲染技术
+\end{itemize}
+
+\indent{}还有很多有趣有用的技术，这里不再给出了。相信通过完成上面的实践，足以建立起对图形学基础和渲染基础
+的基本了解，并已经在这个过程中接触到更多进阶主题，能够根据自身兴趣继续探索。
+
+\end{document}
