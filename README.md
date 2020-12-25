@@ -11,5 +11,6 @@ Some documents of notes and presentations that related to various fields.
 
 #### Computer Graphics
 
+- [How to Start Learning Computer Graphics Programming | 如何开始学习计算机图形学编程](https://drive.google.com/file/d/12d6IfNmzeNAqq-SRJeIUKtFv7tuEVqqg/view?usp=sharing)
 - [The Pixel Coordinates of a 3D Point | 三维点的像素坐标](https://drive.google.com/file/d/1OGq6PM1m5wzA-zUZPY-wC3oPJMs8Stm7/view?usp=sharing)
 - [Introduction of The Perspective Projection Matrix | 透视投影矩阵简介](https://drive.google.com/file/d/1DTbUFDOvVn9dgj0UR1uym_iYfp0kygkd/view?usp=sharing)
